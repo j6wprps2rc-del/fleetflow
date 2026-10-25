@@ -5,9 +5,13 @@ import { AppShell } from '@/components/shell/app-shell';
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { profile } = await requireUser();
 
-  const items = [
-    { href: '/dashboard', label: 'Dashboard', icon: 'dashboard' as const }
-  ];
+ const items: {
+  href: string;
+  label: string;
+  icon: 'dashboard' | 'users';
+}[] = [
+  { href: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
+];
   if (canManageUsers(profile.role)) {
     items.push({ href: '/users', label: 'Users', icon: 'users' as const });
   }
