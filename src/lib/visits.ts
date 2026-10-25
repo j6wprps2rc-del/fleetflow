@@ -9,7 +9,9 @@
  *   - gate_movements and notifications are written in the SAME transaction
  *     (rollback removes partial effects on any failure)
  *   - registration idempotency: client idempotency key + DB unique partial index
- *     on active visits per vehicle
+ *     on active visits per vehicle. Unique-violation races (two concurrent
+ *     inserts) are caught and resolved to the original/conflict result instead
+ *     of surfacing a raw DB error.
  */
 import 'server-only';
 import { withTransaction, pool } from '@/db';
@@ -31,6 +33,16 @@ import {
   type TransitionVisitInput
 } from '@/lib/visit-schemas';
 
+interface PgError {
+  code?: string;
+  constraint?: string;
+}
+
+function isUniqueViolation(err: unknown, constraint: string): boolean {
+  const e = err as PgError;
+  return e?.code === '23505' && e?.constraint === constraint;
+}
+
 export interface RegisterVisitResult {
   ok: true;
   visitId: string;
@@ -42,13 +54,6 @@ export interface RegisterVisitResult {
 export interface ActiveVisitConflictResult {
   ok: false;
   conflict: { visitId: string; visitCode: string; status: WorkflowStatus };
-}
-
-export class TransitionConflictError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'TransitionConflictError';
-  }
 }
 
 export class InvalidTransitionError extends Error {
@@ -85,6 +90,10 @@ export async function findActiveVisitForPlate(
  * new, resolves/creates the company, and inserts the visit — all inside one
  * transaction. Idempotent by client key: a retried request with the same key
  * returns the original visit instead of creating a duplicate.
+ *
+ * Concurrency: two racing requests cannot both create an active visit — the
+ * DB partial unique indexes are the source of truth, and 23505 races are
+ * resolved to the typed results below rather than raw errors.
  */
 export async function registerVisit(
   input: unknown,
@@ -103,7 +112,7 @@ export async function registerVisit(
 
   return withTransaction(async (client) => {
     // Resolve company: existing id, or a new one created inside the transaction.
-    let companyId = data.companyId;
+    let companyId: string = data.companyId;
     if (companyId === 'new') {
       if (!data.newCompanyName) {
         throw new Error('A company name is required when creating a new company.');
@@ -125,25 +134,6 @@ export async function registerVisit(
       companyId = (exists.rows[0] as { id: string }).id;
     }
 
-    // Idempotency: same key returns the original visit (no duplicate on retry).
-    if (data.idempotencyKey) {
-      const existing = await client.query(
-        `select id::text as id, visit_code from vehicle_visits
-          where idempotency_key = $1`,
-        [data.idempotencyKey]
-      );
-      if (existing.rowCount && existing.rowCount > 0) {
-        const row = existing.rows[0] as { id: string; visit_code: string };
-        return {
-          ok: true as const,
-          visitId: row.id,
-          visitCode: row.visit_code,
-          companyId,
-          vehicleId: ''
-        };
-      }
-    }
-
     // Vehicle: upsert on normalized plate (display value preserved on first insert).
     const vehicleResult = await client.query(
       `insert into vehicles (plate_normalized, plate_display)
@@ -154,52 +144,106 @@ export async function registerVisit(
     );
     const vehicleId = (vehicleResult.rows[0] as { id: string }).id;
 
-    // Duplicate protection: one active visit per vehicle (DB partial unique index).
-    const active = await client.query(
-      `select id::text as id, visit_code, status::text as status
-         from vehicle_visits
-        where vehicle_id = $1
-          and status not in ('COMPLETED', 'REJECTED', 'CANCELLED')
-        limit 1`,
-      [vehicleId]
-    );
-    if (active.rowCount && active.rowCount > 0) {
-      const row = active.rows[0] as { id: string; visit_code: string; status: string };
-      if (isWorkflowStatus(row.status)) {
+    // Fast path: same idempotency key retried — return the original visit.
+    if (data.idempotencyKey) {
+      const existing = await client.query(
+        `select id::text as id, visit_code, company_id::text as company_id,
+                vehicle_id::text as vehicle_id
+           from vehicle_visits
+          where idempotency_key = $1`,
+        [data.idempotencyKey]
+      );
+      if (existing.rowCount && existing.rowCount > 0) {
+        const row = existing.rows[0] as {
+          id: string; visit_code: string; company_id: string; vehicle_id: string;
+        };
         return {
-          ok: false as const,
-          conflict: { visitId: row.id, visitCode: row.visit_code, status: row.status }
+          ok: true as const,
+          visitId: row.id,
+          visitCode: row.visit_code,
+          companyId: row.company_id,
+          vehicleId: row.vehicle_id
         };
       }
     }
 
-    const visitResult = await client.query(
-      `insert into vehicle_visits (vehicle_id, company_id, registered_by, notes, idempotency_key)
-       values ($1, $2, $3, $4, $5)
-       returning id::text as id, visit_code`,
-      [vehicleId, companyId, context.userId, data.notes ?? null, data.idempotencyKey]
-    );
-    const visit = visitResult.rows[0] as { id: string; visit_code: string };
+    // Insert the visit; resolve unique-violation races deterministically.
+    try {
+      const visitResult = await client.query(
+        `insert into vehicle_visits (vehicle_id, company_id, registered_by, notes, idempotency_key)
+         values ($1, $2, $3, $4, $5)
+         returning id::text as id, visit_code`,
+        [vehicleId, companyId, context.userId, data.notes ?? null, data.idempotencyKey]
+      );
+      const visit = visitResult.rows[0] as { id: string; visit_code: string };
 
-    await audit(context.userId, 'REGISTER_VISIT', 'vehicle_visits', visit.id, {
-      plate: plate.normalized,
-      companyId,
-      idempotencyKey: data.idempotencyKey
-    });
+      await audit(context.userId, 'REGISTER_VISIT', 'vehicle_visits', visit.id, {
+        plate: plate.normalized,
+        companyId,
+        idempotencyKey: data.idempotencyKey
+      });
 
-    return {
-      ok: true as const,
-      visitId: visit.id,
-      visitCode: visit.visit_code,
-      companyId,
-      vehicleId
-    };
+      return {
+        ok: true as const,
+        visitId: visit.id,
+        visitCode: visit.visit_code,
+        companyId,
+        vehicleId
+      };
+    } catch (err) {
+      // Race: a concurrent request with the SAME key committed first.
+      if (isUniqueViolation(err, 'vehicle_visits_idempotency_idx')) {
+        const existing = await client.query(
+          `select id::text as id, visit_code, company_id::text as company_id,
+                  vehicle_id::text as vehicle_id
+             from vehicle_visits
+            where idempotency_key = $1`,
+          [data.idempotencyKey]
+        );
+        const row = existing.rows[0] as {
+          id: string; visit_code: string; company_id: string; vehicle_id: string;
+        } | undefined;
+        if (row) {
+          return {
+            ok: true as const,
+            visitId: row.id,
+            visitCode: row.visit_code,
+            companyId: row.company_id,
+            vehicleId: row.vehicle_id
+          };
+        }
+      }
+      // Race: a concurrent request opened an active visit for this vehicle first.
+      if (isUniqueViolation(err, 'vehicle_visits_one_active_idx')) {
+        const active = await client.query(
+          `select id::text as id, visit_code, status::text as status
+             from vehicle_visits
+            where vehicle_id = $1
+              and status not in ('COMPLETED', 'REJECTED', 'CANCELLED')
+            limit 1`,
+          [vehicleId]
+        );
+        const row = active.rows[0] as
+          | { id: string; visit_code: string; status: string }
+          | undefined;
+        if (row && isWorkflowStatus(row.status)) {
+          return {
+            ok: false as const,
+            conflict: { visitId: row.id, visitCode: row.visit_code, status: row.status }
+          };
+        }
+      }
+      throw err;
+    }
   });
 }
 
 const ZONE_ID_CACHE: Partial<Record<ZoneCode, string>> = {};
 
-async function zoneIdFor(client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> }, zone: ZoneCode): Promise<string> {
+async function zoneIdFor(
+  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> },
+  zone: ZoneCode
+): Promise<string> {
   if (ZONE_ID_CACHE[zone]) return ZONE_ID_CACHE[zone]!;
   const result = await client.query(
     'select id::text as id from zones where code = $1',
@@ -215,11 +259,21 @@ async function zoneIdFor(client: { query: (sql: string, params?: unknown[]) => P
  * Performs a workflow transition with full server-side authorization and
  * transactional safety. Order of operations inside the transaction:
  *   1. SELECT ... FOR UPDATE the visit row (serializes concurrent transitions)
- *   2. Re-validate the transition against the CURRENT status (post-lock)
- *   3. Insert gate_movements for the transition's effects
- *   4. Update the visit status
- *   5. Insert notifications for the target roles
+ *   2. Authorization against the CURRENT (post-lock) state via assertRole
+ *   3. State-machine validation AFTER the lock
+ *   4. Insert gate_movements for the transition's effects
+ *   5. Update the visit status
+ *   6. Insert notifications for the target roles
  * Any failure rolls back everything — no partial movement records remain.
+ *
+ * Note on the assertRole connection: assertRole verifies the session via the
+ * Supabase client and reads the profile via the pool (a separate connection),
+ * while this transaction holds the visit row lock. That is safe here: the
+ * authorization decision depends only on immutable-in-this-request data
+ * (session + profile role), never on the locked row, and the state machine
+ * re-check after the lock is what actually prevents double transitions. There
+ * is no lock-ordering deadlock risk because each transaction locks exactly one
+ * row before any other query.
  */
 export async function transitionVisit(input: unknown): Promise<{ visitId: string; from: WorkflowStatus; to: WorkflowStatus }> {
   const parsed = transitionVisitSchema.safeParse(input);
@@ -272,7 +326,7 @@ export async function transitionVisit(input: unknown): Promise<{ visitId: string
       );
     }
 
-    // 5 · Status update (audit trail note).
+    // 5 · Status update (completed_at when finishing).
     await client.query(
       `update vehicle_visits
           set status = $1,
@@ -302,7 +356,18 @@ export async function transitionVisit(input: unknown): Promise<{ visitId: string
   });
 }
 
-/** Used by the notifications page: acknowledge, server-authorized. */
+/**
+ * Acknowledges a notification on behalf of the signed-in user.
+ * Server-side authorization: the caller must be an active employee, and the
+ * update is restricted to notifications targeted at the caller's own role that
+ * are not yet acknowledged. acknowledged_at is set by the SERVER (now()),
+ * never taken from client input. The trg_notifications_ack trigger enforces
+ * the same semantics at the DB layer for every role.
+ *
+ * (v2 fix: the previous version had swapped $1/$2 parameters — acknowledged_by
+ * received the notification id and the WHERE matched the profile id, so the
+ * update always affected zero rows.)
+ */
 export async function acknowledgeNotification(notificationId: string): Promise<void> {
   const { profile } = await assertRole([
     'SUPER_ADMIN',
@@ -313,13 +378,16 @@ export async function acknowledgeNotification(notificationId: string): Promise<v
   ]);
   const result = await pool.query(
     `update notifications
-        set acknowledged_at = now(), acknowledged_by = $1
+        set acknowledged_at = now(),
+            acknowledged_by = $1
       where id = $2
         and target_role = $3
         and acknowledged_at is null`,
-    [notificationId, profile.id, profile.role]
+    [profile.id, notificationId, profile.role]
   );
   if (result.rowCount === 0) {
-    throw new PermissionError('Notification not found, not yours, or already acknowledged.');
+    throw new PermissionError(
+      'Notification not found, not targeted at your role, or already acknowledged.'
+    );
   }
 }

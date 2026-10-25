@@ -1,7 +1,11 @@
 /**
  * Checkpoint 3 tests — authorization matrix, state validation, gate movement
  * mapping, duplicate handling, schema validation, and static characterization
- * of the 0003 migration's RLS policies and grants.
+ * of the 0003 migration's RLS policies, grants, and acknowledgement trigger.
+ *
+ * NOTE (honest scope): these are static/pure tests. The acknowledge query's
+ * parameter binding and the trigger's runtime behavior need an isolated test
+ * database (integration) — see README § Testing for the documented gap.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -19,9 +23,12 @@ import {
   plateSchema
 } from '../src/lib/visit-schemas';
 import { canTransition, requiresReason } from '../src/lib/workflow';
-import type { AppRole } from '../src/lib/rbac';
 
 const sql0003 = readFileSync(join(process.cwd(), 'drizzle', '0003_visits.sql'), 'utf8');
+const visitsSrc = readFileSync(
+  join(process.cwd(), 'src', 'lib', 'visits.ts'),
+  'utf8'
+);
 
 function code(sql: string): string {
   return sql
@@ -159,6 +166,12 @@ describe('duplicate registration handling', () => {
     expect(isRegisterableStatus('REJECTED')).toBe(false);
     expect(isRegisterableStatus('CANCELLED')).toBe(false);
   });
+
+  it('resolves unique-violation races by constraint name', () => {
+    // The race handlers must target exactly the two partial unique indexes.
+    expect(visitsSrc).toContain("isUniqueViolation(err, 'vehicle_visits_idempotency_idx')");
+    expect(visitsSrc).toContain("isUniqueViolation(err, 'vehicle_visits_one_active_idx')");
+  });
 });
 
 // ── schema validation ─────────────────────────────────────────────────
@@ -218,26 +231,58 @@ describe('visit schemas', () => {
   });
 });
 
-// ── 0003 migration characterization ──────────────────────────────────
+// ── 0003 migration security characterization (v2 revision) ───────────
 
 describe('0003 migration security characterization', () => {
-  it('notifications RLS: read and acknowledge are restricted to the own role', () => {
-    const readPolicy = c3.match(/create policy "notifications_read_own_role"[\s\S]*?;/)?.[0] ?? '';
-    expect(readPolicy).toContain('target_role =');
-    expect(readPolicy).toContain('is_active');
-
-    const ackPolicy = c3.match(/create policy "notifications_ack_own_role"[\s\S]*?;/)?.[0] ?? '';
-    expect(ackPolicy).toContain('target_role =');
-    expect(ackPolicy).toContain('acknowledged_at is null');
-    expect(ackPolicy).toContain('acknowledged_by = auth.uid()');
+  it('is fully rerunnable: drop-if-exists precedes every policy/trigger creation', () => {
+    expect(c3).toMatch(
+      /drop policy if exists "notifications_read_own_role"[\s\S]*?create policy "notifications_read_own_role"/
+    );
+    expect(c3).toMatch(
+      /drop policy if exists "notifications_ack_own_role"[\s\S]*?create policy "notifications_ack_own_role"/
+    );
+    expect(c3).toMatch(
+      /drop trigger if exists trg_notifications_ack[\s\S]*?create trigger trg_notifications_ack/
+    );
+    expect(c3).toMatch(/add column if not exists idempotency_key text/);
   });
 
-  it('clients cannot insert, delete, or broadly update notifications', () => {
+  it('uses a hardened SECURITY DEFINER role helper (no dependency on profiles RLS)', () => {
+    const fn = c3.match(/create or replace function public\.current_app_role\(\)[\s\S]*?\$\$;/)?.[0] ?? '';
+    expect(fn).toContain('security definer');
+    expect(fn).toContain('set search_path = public');
+    expect(fn).toContain('is_active');
+    expect(c3).toMatch(
+      /revoke execute on function public\.current_app_role\(\) from public, anon/
+    );
+    expect(c3).toMatch(
+      /grant execute on function public\.current_app_role\(\) to authenticated/
+    );
+
+    const readPolicy = c3.match(/create policy "notifications_read_own_role"[\s\S]*?;/)?.[0] ?? '';
+    expect(readPolicy).toContain('target_role = public.current_app_role()');
+  });
+
+  it('clients cannot insert, delete, or update notifications at all', () => {
     expect(c3).toMatch(/revoke insert, delete on public\.notifications from anon, authenticated/);
     expect(c3).toMatch(/revoke update on public\.notifications from anon, authenticated/);
-    expect(c3).toMatch(
-      /grant update \(acknowledged_at, acknowledged_by\) on public\.notifications to authenticated/
-    );
+    // Crucially: no re-grant of update to client roles (timestamp forgery closed).
+    expect(c3).not.toMatch(/grant update[^;]*on public\.notifications to authenticated/);
+  });
+
+  it('acknowledgement semantics are enforced by a DB trigger for every role', () => {
+    const fn = c3.match(/create or replace function public\.enforce_notification_ack\(\)[\s\S]*?\$\$;/)?.[0] ?? '';
+    expect(fn).toContain('only acknowledgement fields may change');
+    expect(fn).toContain('already acknowledged');
+    expect(fn).toContain('acknowledged_by is required');
+    expect(fn).toContain('new.acknowledged_at := now()'); // arbitrary timestamps impossible
+  });
+
+  it('ack policy (defense in depth): own role, unacknowledged, self as acknowledger', () => {
+    const ackPolicy = c3.match(/create policy "notifications_ack_own_role"[\s\S]*?;/)?.[0] ?? '';
+    expect(ackPolicy).toContain('target_role = public.current_app_role()');
+    expect(ackPolicy).toContain('acknowledged_at is null');
+    expect(ackPolicy).toContain('acknowledged_by = auth.uid()');
   });
 
   it('enforces one active visit per vehicle via a partial unique index', () => {
@@ -246,7 +291,6 @@ describe('0003 migration security characterization', () => {
   });
 
   it('makes registration idempotent via a unique idempotency key index', () => {
-    expect(c3).toMatch(/add column if not exists idempotency_key text/);
     expect(c3).toMatch(/create unique index if not exists vehicle_visits_idempotency_idx/);
   });
 
@@ -255,5 +299,27 @@ describe('0003 migration security characterization', () => {
     expect(c3).toContain('references public.vehicle_visits(id)');
     expect(c3).toContain('references public.profiles(id)');
     expect(c3).not.toMatch(/create type/i);
+  });
+});
+
+// ── acknowledge query binding regression ─────────────────────────────
+
+describe('acknowledgeNotification query binding (regression for swapped params)', () => {
+  it('binds acknowledged_by=$1(profile), id=$2(notification), role=$3 in order', () => {
+    const query =
+      visitsSrc.match(
+        /update notifications[\s\S]*?and acknowledged_at is null`/,
+      )?.[0] ?? '';
+    expect(query).toContain('set acknowledged_at = now()');
+    expect(query).toContain('acknowledged_by = $1');
+    expect(query).toContain('where id = $2');
+    expect(query).toContain('target_role = $3');
+    expect(query).toContain('and acknowledged_at is null');
+
+    // The parameter array must follow exactly that order.
+    const params = visitsSrc.match(
+      /update notifications[\s\S]*?and acknowledged_at is null`,\s*\[([^\]]*)\]/,
+    )?.[1] ?? '';
+    expect(params.replace(/\s/g, '')).toBe('[profile.id,notificationId,profile.role]');
   });
 });
