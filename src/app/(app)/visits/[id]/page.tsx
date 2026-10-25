@@ -5,7 +5,6 @@ import { pool } from '@/db';
 import {
   TRANSITIONS,
   isWorkflowStatus,
-  requiresReason,
   type WorkflowStatus
 } from '@/lib/workflow';
 import { authorizedRolesForTransition } from '@/lib/visit-mapping';
@@ -96,17 +95,16 @@ export default async function VisitDetailPage({
   const timeline = movements.rows as MovementRow[];
 
   const status = isWorkflowStatus(visit.status) ? visit.status : 'REGISTERED';
+  const isTerminal = ['COMPLETED', 'REJECTED', 'CANCELLED'].includes(status);
 
-  // Server-side computed next actions for THIS role (UI hiding is cosmetic;
-  // the transition action re-checks authorization under the row lock).
-  const nextStatuses = (TRANSITIONS[status] ?? []).filter(
-    (target) => target !== 'COMPLETED' || true // completed included via TRANSITIONS
-  );
-  const available = nextStatuses.filter((target) =>
+  // Server-side computed action sets for THIS role. UI hiding is cosmetic;
+  // the transition action re-checks authorization under the row lock.
+  const available = (TRANSITIONS[status] ?? []).filter((target) =>
     authorizedRolesForTransition(status, target).includes(profile.role)
   );
-  const adminTargets = requiresReason(status) ? [] : (['ON_HOLD', 'REJECTED', 'CANCELLED'] as WorkflowStatus[])
-    .filter(() => profile.role === 'SUPER_ADMIN' && !['COMPLETED', 'REJECTED', 'CANCELLED'].includes(status));
+  const adminTargets: WorkflowStatus[] = profile.role === 'SUPER_ADMIN' && !isTerminal
+    ? ['ON_HOLD', 'REJECTED', 'CANCELLED']
+    : [];
 
   return (
     <div className="flex flex-col gap-6">

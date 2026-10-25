@@ -1,5 +1,5 @@
 import { requireUser } from '@/lib/auth';
-import { canManageUsers, canRegisterVisit, ROLE_LABEL } from '@/lib/rbac';
+import { canManageUsers, ROLE_LABEL } from '@/lib/rbac';
 import { pool } from '@/db';
 import { AppShell, type NavItem } from '@/components/shell/app-shell';
 
@@ -11,9 +11,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     { href: '/visits', label: 'Visits', icon: 'trucks' },
     { href: '/notifications', label: 'Notifications', icon: 'notifications' }
   ];
-  if (canRegisterVisit(profile.role)) {
-    // The registration entry point lives inside the Visits page for all roles.
-  }
   if (canManageUsers(profile.role)) {
     items.push({ href: '/users', label: 'Users', icon: 'users' });
   }
