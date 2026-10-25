@@ -122,7 +122,7 @@ describe('0002 — audit_logs policy hardening', () => {
 
 describe('0001 — known legacy issues (documented, corrected by 0002)', () => {
   it('contains the original recursive profiles policy that 0002 replaces', () => {
-    expect(c1).toMatch(/exists \(select 1 from profiles p\)/);
+    expect(c1).toMatch(/exists \(select 1 from profiles p where/);
   });
 
   it('profiles is created with the least-privilege SUPERVISOR default', () => {
