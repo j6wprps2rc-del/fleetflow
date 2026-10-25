@@ -1,5 +1,5 @@
 import { requireUser } from '@/lib/auth';
-import { canManageUsers, ROLE_LABEL } from '@/lib/rbac';
+import { canManageUsers, canViewAudit, ROLE_LABEL } from '@/lib/rbac';
 import { pool } from '@/db';
 import { AppShell, type NavItem } from '@/components/shell/app-shell';
 
@@ -13,6 +13,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   ];
   if (canManageUsers(profile.role)) {
     items.push({ href: '/users', label: 'Users', icon: 'users' });
+  }
+  if (canViewAudit(profile.role)) {
+    items.push({ href: '/audit', label: 'Audit Trail', icon: 'audit' });
   }
 
   const unread = await pool.query(
