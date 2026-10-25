@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+build/
+
+# environment — NEVER commit these
+.env
+.env.*
+!.env.example
+.env.local
+.env.development.local
+.env.production.local
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
+yarn-error.log*
+.vercel
+next-env.d.ts
+*.tsbuildinfo
+coverage/
