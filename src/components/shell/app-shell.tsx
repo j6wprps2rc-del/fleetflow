@@ -3,30 +3,33 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
-import { LayoutDashboard, LogOut, PanelLeft, Users, Truck } from 'lucide-react';
+import { Bell, LayoutDashboard, LogOut, PanelLeft, Users, Truck } from 'lucide-react';
 import { signOut } from '@/lib/auth-actions';
 
 export interface NavItem {
   href: string;
   label: string;
-  icon: 'dashboard' | 'users' | 'trucks';
+  icon: 'dashboard' | 'users' | 'trucks' | 'notifications';
 }
 
 const ICONS = {
   dashboard: LayoutDashboard,
   users: Users,
-  trucks: Truck
+  trucks: Truck,
+  notifications: Bell
 } as const;
 
 export function AppShell({
   items,
   name,
   roleLabel,
+  unreadNotifications = 0,
   children
 }: {
   items: NavItem[];
   name: string;
   roleLabel: string;
+  unreadNotifications?: number;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -55,7 +58,7 @@ export function AppShell({
                 key={item.href}
                 href={item.href}
                 aria-current={active ? 'page' : undefined}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition ${
+                className={`relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition ${
                   active
                     ? 'bg-ff-petrol/20 text-white'
                     : 'text-slate-400 hover:bg-ff-bg hover:text-white'
@@ -64,6 +67,14 @@ export function AppShell({
               >
                 <Icon size={18} className="shrink-0" />
                 {!collapsed ? <span className="truncate">{item.label}</span> : null}
+                {item.icon === 'notifications' && unreadNotifications > 0 ? (
+                  <span
+                    aria-label={`${unreadNotifications} unread notifications`}
+                    className="absolute right-2 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-ff-danger px-1 text-[10px] font-bold text-white"
+                  >
+                    {unreadNotifications > 99 ? '99+' : unreadNotifications}
+                  </span>
+                ) : null}
               </Link>
             );
           })}

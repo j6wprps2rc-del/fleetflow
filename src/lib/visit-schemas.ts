@@ -16,6 +16,12 @@ export const plateSchema = z
 
 export const uuidSchema = z.string().uuid('Must be a valid identifier.');
 
+/** Either an existing company id or the literal 'new' (create on the fly). */
+export const companyRefSchema = z.union([
+  uuidSchema,
+  z.literal('new')
+]);
+
 export const driverNameSchema = z
   .string()
   .trim()
@@ -42,20 +48,30 @@ export const idempotencyKeySchema = z
   .min(8, 'Idempotency key is malformed.')
   .max(64, 'Idempotency key is malformed.');
 
-export const registerVisitSchema = z.object({
-  plate: plateSchema,
-  companyId: uuidSchema,
-  newCompanyName: companyNameSchema.optional(),
-  driverName: driverNameSchema.optional(),
-  driverPhone: z
-    .string()
-    .trim()
-    .max(30, 'Phone is too long.')
-    .regex(/^[+0-9\s()\-]*$/, 'Phone contains invalid characters.')
-    .optional(),
-  notes: notesSchema,
-  idempotencyKey: idempotencyKeySchema
-});
+export const registerVisitSchema = z
+  .object({
+    plate: plateSchema,
+    companyId: companyRefSchema,
+    newCompanyName: companyNameSchema.optional(),
+    driverName: driverNameSchema.optional(),
+    driverPhone: z
+      .string()
+      .trim()
+      .max(30, 'Phone is too long.')
+      .regex(/^[+0-9\s()\-]*$/, 'Phone contains invalid characters.')
+      .optional(),
+    notes: notesSchema,
+    idempotencyKey: idempotencyKeySchema
+  })
+  .superRefine((value, ctx) => {
+    if (value.companyId === 'new' && !value.newCompanyName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['newCompanyName'],
+        message: 'A company name is required when creating a new company.'
+      });
+    }
+  });
 
 export type RegisterVisitInput = z.infer<typeof registerVisitSchema>;
 
