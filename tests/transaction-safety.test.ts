@@ -71,8 +71,8 @@ interface CapturedCall {
 /**
  * Content-matched fake transaction client: each step's response is chosen by
  * matching the SQL text (first match wins). Unmatched SQL returns an empty OK.
- * This is robust against statement ordering (BEGIN/COMMIT included) and lets
- * each test script only what it cares about.
+ * Robust against statement ordering (BEGIN/COMMIT included) and future
+ * statement additions.
  */
 function fakeClient(steps: Step[]) {
   const calls: CapturedCall[] = [];
@@ -94,6 +94,8 @@ const asExec = (c: unknown) => c as QueryExecutor;
 
 const UUID = '11111111-1111-1111-1111-111111111111';
 const OK: FakeResult = { rows: [], rowCount: 0 };
+
+const ZONE_ROW: FakeResult = { rows: [{ id: UUID }], rowCount: 1 };
 
 const SECURITY_PROFILE = {
   id: 'user-uuid-1',
@@ -325,7 +327,8 @@ describe('transitionVisit connection behavior', () => {
   it('authorizes on the tx client against post-lock state and writes TRANSITION_VISIT audit in-transaction', async () => {
     const { client, calls } = fakeClient([
       { match: /for update/, result: { rows: [LOCKED_VISIT], rowCount: 1 } },
-      { match: /from\s+profiles/, result: { rows: [SECURITY_PROFILE], rowCount: 1 } }
+      { match: /from\s+profiles/, result: { rows: [SECURITY_PROFILE], rowCount: 1 } },
+      { match: /from\s+zones/, result: ZONE_ROW }
     ]);
     poolConnectSpy.mockResolvedValueOnce(asTx(client));
 
@@ -339,7 +342,7 @@ describe('transitionVisit connection behavior', () => {
     const sqls = calls.map((c) => c.sql);
     // 1 movement for WAITING_FOR_SECURITY → AT_SECURITY (SECURITY ENTRY)
     expect(sqls.filter((s) => s.includes('insert into gate_movements')).length).toBe(1);
-    expect(sqls.some((s) => s.includes("values ($1, $2, 'ENTRY'"))).toBe(false); // sanity: direction is a param
+    expect(sqls.some((s) => s.includes("values ($1, $2, 'ENTRY'"))).toBe(false); // direction is a param
     expect(sqls.some((s) => s.includes('update vehicle_visits'))).toBe(true);
     expect(sqls.some((s) => s.includes('insert into notifications'))).toBe(true);
 
@@ -358,6 +361,7 @@ describe('transitionVisit connection behavior', () => {
     const { client, calls } = fakeClient([
       { match: /for update/, result: { rows: [LOCKED_VISIT], rowCount: 1 } },
       { match: /from\s+profiles/, result: { rows: [SECURITY_PROFILE], rowCount: 1 } },
+      { match: /from\s+zones/, result: ZONE_ROW },
       { match: /insert into gate_movements/, result: new Error('gate movement insert failed') }
     ]);
     poolConnectSpy.mockResolvedValueOnce(asTx(client));
