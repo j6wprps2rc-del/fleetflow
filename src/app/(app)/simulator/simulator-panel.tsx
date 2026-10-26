@@ -12,6 +12,12 @@ import type { GatewayRow } from '@/lib/ingestion';
 
 const ZONES = ['PARKING', 'SECURITY', 'LABORATORY'] as const;
 
+interface ActionResult {
+  ok: boolean;
+  message: string;
+  plaintextKey?: string;
+}
+
 export function SimulatorPanel({ gateways }: { gateways: GatewayRow[] }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -20,13 +26,18 @@ export function SimulatorPanel({ gateways }: { gateways: GatewayRow[] }) {
   const [tag, setTag] = useState('');
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string; key?: string } | null>(null);
 
-  function run(fn: () => Promise<{ ok: boolean; message: string; plaintextKey?: string }>) {
+  function run(fn: () => Promise<ActionResult>) {
     setFeedback(null);
     startTransition(async () => {
       const result = await fn();
       setFeedback({ ok: result.ok, message: result.message, key: result.plaintextKey });
       if (result.ok) router.refresh();
     });
+  }
+
+  function createGateway() {
+    run(() => createGatewayAction({ label, zoneCode: zone }));
+    setLabel('');
   }
 
   return (
@@ -73,13 +84,11 @@ export function SimulatorPanel({ gateways }: { gateways: GatewayRow[] }) {
           <button
             type="button"
             disabled={pending || label.trim().length < 3}
-            onClick={() =>
-              run(() => createGatewayAction({ label, zoneCode: zone })).then(() => setLabel(''))
-            }
+            onClick={createGateway}
             className="rounded-lg bg-ff-petrol px-4 py-2 text-sm font-semibold text-white transition hover:bg-ff-petrol/80 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {pending ? 'Working…' : 'Create gateway'}
-          </bton>
+          </button>
         </div>
       </section>
 
@@ -91,7 +100,7 @@ export function SimulatorPanel({ gateways }: { gateways: GatewayRow[] }) {
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-sm">
               <thead>
-                <tr className="border-b border-ff-border text-xs uppercase tracking-wider text-stext-slate-500">
+                <tr className="border-b border-ff-border text-xs uppercase tracking-wider text-slate-500">
                   <th className="px-3 py-2">Label</th>
                   <th className="px-3 py-2">Zone</th>
                   <th className="px-3 py-2">Status</th>
@@ -115,7 +124,7 @@ export function SimulatorPanel({ gateways }: { gateways: GatewayRow[] }) {
                       {g.lastSeenAt ? new Date(g.lastSeenAt).toLocaleString() : 'Never'}
                     </td>
                     <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-2">
+                      "flex flex-wrap gap-2""
                         <button
                           type="button"
                           disabled={pending}
@@ -128,7 +137,7 @@ export function SimulatorPanel({ gateways }: { gateways: GatewayRow[] }) {
                           type="button"
                           disabled={pending}
                           onClick={() => run(() => setGatewayActiveAction(g.id, !g.isActive))}
-                          className="rounded border border-فت border-ff-border px-2 py-1 text-xs text-slate-300 hover:border-ff-warning hover:text-ff-warning"
+                          className="rounded border border-ff-border px-2 py-1 text-xs text-slate-300 hover:border-ff-warning hover:text-ff-warning"
                         >
                           {g.isActive ? 'Deactivate' : 'Activate'}
                         </button>
@@ -161,7 +170,9 @@ export function SimulatorPanel({ gateways }: { gateways: GatewayRow[] }) {
             onClick={() =>
               run(async () => {
                 const key = window.prompt('Gateway key (paste the key you saved)');
-                if (!key) return { ok: false, message: 'Simulation cancelled — no key provided.' };
+                if (!key) {
+                  return { ok: false, message: 'Simulation cancelled — no key provided.' };
+                }
                 return simulateDetectionAction({ gatewayKey: key, bleTagId: tag.trim() });
               })
             }
