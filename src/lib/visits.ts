@@ -16,7 +16,8 @@
 import 'server-only';
 import { withTransaction, pool } from '@/db';
 import { audit } from '@/lib/audit';
-import { assertRole, PermissionError } from '@/lib/auth';
+import { assertRole, getCurrentUser, PermissionError } from '@/lib/auth';
+import { isAppRole } from '@/lib/rbac';
 import { canTransition, isWorkflowStatus, requiresReason, type WorkflowStatus } from '@/lib/workflow';
 import { normalizePlate, validatePlate } from '@/lib/plate';
 import {
@@ -166,8 +167,12 @@ export async function registerVisit(
         };
       }
     }
+    // Insert the visit; use a savepoint so unique violations do not abort
+    // the surrounding transaction before we resolve the conflict.
+    await client.query('SAVEPOINT visit_insert');
 
-    // Insert the visit; resolve unique-violation races deterministically.
+    let visit: { id: string; visit_code: string };
+
     try {
       const visitResult = await client.query(
         `insert into vehicle_visits (vehicle_id, company_id, registered_by, notes, idempotency_key)
@@ -175,23 +180,13 @@ export async function registerVisit(
          returning id::text as id, visit_code`,
         [vehicleId, companyId, context.userId, data.notes ?? null, data.idempotencyKey]
       );
-      const visit = visitResult.rows[0] as { id: string; visit_code: string };
 
-      await audit(context.userId, 'REGISTER_VISIT', 'vehicle_visits', visit.id, {
-        plate: plate.normalized,
-        companyId,
-        idempotencyKey: data.idempotencyKey
-      });
-
-      return {
-        ok: true as const,
-        visitId: visit.id,
-        visitCode: visit.visit_code,
-        companyId,
-        vehicleId
-      };
+      visit = visitResult.rows[0] as { id: string; visit_code: string };
+      await client.query('RELEASE SAVEPOINT visit_insert');
     } catch (err) {
-      // Race: a concurrent request with the SAME key committed first.
+      await client.query('ROLLBACK TO SAVEPOINT visit_insert');
+      await client.query('RELEASE SAVEPOINT visit_insert');
+
       if (isUniqueViolation(err, 'vehicle_visits_idempotency_idx')) {
         const existing = await client.query(
           `select id::text as id, visit_code, company_id::text as company_id,
@@ -200,9 +195,14 @@ export async function registerVisit(
             where idempotency_key = $1`,
           [data.idempotencyKey]
         );
+
         const row = existing.rows[0] as {
-          id: string; visit_code: string; company_id: string; vehicle_id: string;
+          id: string;
+          visit_code: string;
+          company_id: string;
+          vehicle_id: string;
         } | undefined;
+
         if (row) {
           return {
             ok: true as const,
@@ -213,7 +213,7 @@ export async function registerVisit(
           };
         }
       }
-      // Race: a concurrent request opened an active visit for this vehicle first.
+
       if (isUniqueViolation(err, 'vehicle_visits_one_active_idx')) {
         const active = await client.query(
           `select id::text as id, visit_code, status::text as status
@@ -223,18 +223,39 @@ export async function registerVisit(
             limit 1`,
           [vehicleId]
         );
+
         const row = active.rows[0] as
           | { id: string; visit_code: string; status: string }
           | undefined;
+
         if (row && isWorkflowStatus(row.status)) {
           return {
             ok: false as const,
-            conflict: { visitId: row.id, visitCode: row.visit_code, status: row.status }
+            conflict: {
+              visitId: row.id,
+              visitCode: row.visit_code,
+              status: row.status
+            }
           };
         }
       }
+
       throw err;
     }
+
+    await audit(context.userId, 'REGISTER_VISIT', 'vehicle_visits', visit.id, {
+      plate: plate.normalized,
+      companyId,
+      idempotencyKey: data.idempotencyKey
+    });
+
+    return {
+      ok: true as const,
+      visitId: visit.id,
+      visitCode: visit.visit_code,
+      companyId,
+      vehicleId
+    };
   });
 }
 
