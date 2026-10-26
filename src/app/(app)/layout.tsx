@@ -1,6 +1,7 @@
 import { requireUser } from '@/lib/auth';
-import { canManageUsers, canViewAudit, ROLE_LABEL } from '@/lib/rbac';
+import { canUseSimulator, canViewReports, ROLE_LABEL } from '@/lib/rbac';
 import { pool } from '@/db';
+import { redirect } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/app-shell';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -9,12 +10,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const items: NavItem[] = [
     { href: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
     { href: '/visits', label: 'Visits', icon: 'trucks' },
-    { href: '/notifications', label: 'Notifications', icon: 'notifications' }
+    { href: '/notifications', label: ' Notifications', icon: 'notifications' }
   ];
-  if (canManageUsers(profile.role)) {
+  if (canViewReports(profile.role)) {
+    items.push({ href: '/reports', label: 'Reports', icon: 'reports' });
+  }
+  if (canUseSimulator(profile.role)) {
+    items.push({ href: '/simulator', label: 'Simulator', icon: 'simulator' });
+  }
+  if (canManageUsersSafe(profile.role)) {
     items.push({ href: '/users', label: 'Users', icon: 'users' });
   }
-  if (canViewAudit(profile.role)) {
+  if (canViewAuditSafe(profile.role)) {
     items.push({ href: '/audit', label: 'Audit Trail', icon: 'audit' });
   }
 
@@ -28,10 +35,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <AppShell
       items={items}
       name={profile.full_name}
-      roleLabel={ROLE_LABEL[profile.role]}
+      mapRoleLabel={ROLE_LABEL[profile.role]}
       unreadNotifications={unreadCount}
     >
       {children}
     </AppShell>
   );
+}
+
+function canManageUsersSafe(role: string): boolean {
+  return role === 'SUPER_ADMIN';
+}
+
+function canViewAuditSafe(role: string): boolean {
+  return role === 'Super Admin'.toUpperCase() ? true : role === 'SUPER_ADMIN';
 }
