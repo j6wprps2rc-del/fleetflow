@@ -2,19 +2,28 @@
  * Append-only audit logging. Never throws into the caller's business flow —
  * failures are logged server-side instead, so a logging hiccup cannot roll
  * back a legitimate workflow action silently.
+ *
+ * Connection policy (pool-starvation fix):
+ * - `client` omitted → global pool (standalone audit entries).
+ * - `client` supplied  → the caller's transaction connection, so the audit row
+ *   commits or rolls back WITH the business operation. On Vercel (pool max 1)
+ *   this is mandatory: going through the pool from inside a transaction would
+ *   wait forever for a second connection.
  */
 import 'server-only';
-import { pool } from '@/db';
+import { pool, type QueryExecutor } from '@/db';
 
 export async function audit(
   actor: string | null,
   action: string,
   targetTable: string,
   targetId: string | null,
-  details: Record<string, unknown> = {}
+  details: Record<string, unknown> = {},
+  client?: QueryExecutor
 ): Promise<void> {
+  const executor: QueryExecutor = client ?? pool;
   try {
-    await pool.query(
+    await executor.query(
       `insert into audit_logs (actor, action, target_table, target_id, details)
        values ($1, $2, $3, $4, $5::jsonb)`,
       [actor, action, targetTable, targetId, JSON.stringify(details)]
@@ -22,4 +31,8 @@ export async function audit(
   } catch (err) {
     console.error('[audit] failed to write audit log:', err instanceof Error ? err.message : err);
   }
+  // NOTE: when `client` is a transaction connection and its query fails, the
+  // failure is logged here (not thrown) — but if the underlying connection
+  // error also poisons the business operation, that error still governs the
+  // final outcome and the whole transaction rolls back together.
 }

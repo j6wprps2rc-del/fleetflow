@@ -6,11 +6,18 @@
  * - requireUser(): for pages (redirects unauthenticated users to /login).
  * - assertRole(): for server actions (throws PermissionError — never relies on
  *   hidden UI buttons).
+ *
+ * Connection policy (pool-starvation fix): getProfile/assertRole accept an
+ * optional QueryExecutor (the caller's transaction client). Inside
+ * withTransaction on Vercel (pool max 1) the authorization query MUST run on
+ * the already-checked-out transaction connection; going through the global
+ * pool would block forever waiting for a second connection. Authorization is
+ * still performed against the POST-LOCK state (not moved before the txn).
  */
 import 'server-only';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
-import { pool } from '@/db';
+import { pool, type QueryExecutor } from '@/db';
 import { isAppRole, type AppRole, type ProfileRow } from '@/lib/rbac';
 
 export class PermissionError extends Error {
@@ -28,8 +35,12 @@ export async function getCurrentUser() {
   return user ?? null;
 }
 
-export async function getProfile(userId: string): Promise<ProfileRow | null> {
-  const result = await pool.query(
+export async function getProfile(
+  userId: string,
+  client?: QueryExecutor
+): Promise<ProfileRow | null> {
+  const executor: QueryExecutor = client ?? pool;
+  const result = await executor.query(
     `select id::text as id, full_name, coalesce(email, '') as email,
             role::text as role, is_active
        from profiles
@@ -44,7 +55,10 @@ export async function getProfile(userId: string): Promise<ProfileRow | null> {
 }
 
 /** Page-level guard: redirects unauthenticated/inactive users to /login. */
-export async function requireUser(): Promise<{ user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>; profile: ProfileRow }> {
+export async function requireUser(): Promise<{
+  user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>;
+  profile: ProfileRow;
+}> {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
   const profile = await getProfile(user.id);
@@ -55,10 +69,16 @@ export async function requireUser(): Promise<{ user: NonNullable<Awaited<ReturnT
 }
 
 /** Action-level guard: throws — for server actions / API route handlers. */
-export async function assertRole(roles: readonly AppRole[]) {
+export async function assertRole(
+  roles: readonly AppRole[],
+  client?: QueryExecutor
+): Promise<{
+  user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>;
+  profile: ProfileRow;
+}> {
   const user = await getCurrentUser();
   if (!user) throw new PermissionError('Not authenticated.');
-  const profile = await getProfile(user.id);
+  const profile = await getProfile(user.id, client);
   if (!profile || !profile.is_active) throw new PermissionError('Account is inactive.');
   if (!roles.includes(profile.role)) {
     throw new PermissionError(`Forbidden for role ${profile.role}.`);
