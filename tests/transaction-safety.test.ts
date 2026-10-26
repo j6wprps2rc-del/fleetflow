@@ -287,23 +287,42 @@ describe('transaction-client propagation', () => {
     expect(poolQuerySpy).toHaveBeenCalledTimes(1);
   });
 
-  it('audit failures are non-fatal (logged, not thrown) on both paths', async () => {
+  it('transactional audit failures are logged and re-thrown', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const { client } = fakeClient([
-        { match: /insert into audit_logs/, result: new Error('audit insert failed') }
+        {
+          match: /insert into audit_logs/,
+          result: new Error('audit insert failed')
+        }
       ]);
+
       await expect(
         audit('u1', 'TEST_ACT', 't', 'x', {}, asExec(client))
+      ).rejects.toThrow('audit insert failed');
+
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('standalone audit failures remain non-fatal', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      poolQuerySpy.mockRejectedValueOnce(new Error('pool audit failed'));
+
+      await expect(
+        audit('u1', 'TEST_ACT', 't', 'x', {})
       ).resolves.toBeUndefined();
 
-      poolQuerySpy.mockRejectedValueOnce(new Error('pool audit failed'));
-      await expect(audit('u1', 'TEST_ACT', 't', 'x', {})).resolves.toBeUndefined();
+      expect(errSpy).toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
     }
   });
 });
+
 
 // ── 3 · registerVisit / transitionVisit on fake clients ────────────
 
@@ -411,25 +430,30 @@ describe('transitionVisit connection behavior', () => {
     expect(details.reason).toBeNull();
   });
 
-  it('rolls back everything (incl. the audit row) when a step fails', async () => {
+  it('rolls back the visit transition when the audit insert fails', async () => {
     const { client, calls } = fakeClient([
       { match: /for update/, result: { rows: [LOCKED_VISIT], rowCount: 1 } },
       { match: /from\s+profiles/, result: { rows: [SECURITY_PROFILE], rowCount: 1 } },
       { match: /from\s+zones/, result: ZONE_ROW },
-      { match: /insert into gate_movements/, result: new Error('gate movement insert failed') }
+      { match: /insert into audit_logs/, result: new Error('audit insert failed') }
     ]);
     poolConnectSpy.mockResolvedValueOnce(asTx(client));
 
-    await expect(
-      transitionVisit({ visitId: UUID, target: 'AT_SECURITY' })
-    ).rejects.toThrow('gate movement insert failed');
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(
+        transitionVisit({ visitId: UUID, target: 'AT_SECURITY' })
+      ).rejects.toThrow('audit insert failed');
 
-    const sqls = calls.map((c) => c.sql);
-    expect(sqls.some((s) => s.includes('insert into audit_logs'))).toBe(false);
-    expect(sqls.some((s) => s.includes('insert into notifications'))).toBe(false);
-    expect(at(sqls, sqls.length - 1, 'last transaction statement')).toBe('ROLLBACK');
-    expect(poolQuerySpy).not.toHaveBeenCalled();
-    expect(client.release).toHaveBeenCalled();
+      const sqls = calls.map((c) => c.sql);
+      expect(sqls.some((s) => s === 'COMMIT')).toBe(false);
+      expect(at(sqls, sqls.length - 1, 'last transaction statement')).toBe('ROLLBACK');
+      expect(poolQuerySpy).not.toHaveBeenCalled();
+      expect(client.release).toHaveBeenCalled();
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it('rejects unauthorized roles (assertRole throws on the tx client)', async () => {

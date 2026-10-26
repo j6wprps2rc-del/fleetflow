@@ -29,10 +29,13 @@ export async function audit(
       [actor, action, targetTable, targetId, JSON.stringify(details)]
     );
   } catch (err) {
-    console.error('[audit] failed to write audit log:', err instanceof Error ? err.message : err);
+    console.error(
+      '[audit] failed to write audit log:',
+      err instanceof Error ? err.message : err
+    );
+
+    if (client) {
+      throw err;
+    }
   }
-  // NOTE: when `client` is a transaction connection and its query fails, the
-  // failure is logged here (not thrown) — but if the underlying connection
-  // error also poisons the business operation, that error still governs the
-  // final outcome and the whole transaction rolls back together.
 }
