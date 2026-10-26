@@ -15,12 +15,22 @@
  *      back on failure.
  *   4. Non-transactional paths (acknowledgeNotification) still use the pool.
  *
+ * Typing notes (root-cause fixes for the 14 tsc errors under
+ * strict + noUncheckedIndexedAccess):
+ *   - Both pool spies carry EXPLICIT signatures. Without them, vi.fn infers
+ *     `rows: never[]` from the default response and an empty parameters tuple
+ *     (making mock.calls[0][0] a type error). With them, fixtures are checked
+ *     against QueryResult and call arguments are typed.
+ *   - The `at()` helper performs guarded indexed access: it THROWS with a
+ *     descriptive message when an element is missing, so a broken expectation
+ *     fails loudly instead of being silenced by a non-null assertion.
+ *   - beforeEach resets each spy and re-establishes its default:
+ *     poolQuerySpy answers empty OK; poolConnectSpy THROWS on any checkout
+ *     that a test did not explicitly mock — an unmocked connect is exactly
+ *     the 'second connection' regression these tests exist to catch.
+ *
  * NOTE: spies used inside vi.mock factories MUST be created with vi.hoisted —
  * vi.mock is hoisted above ordinary const declarations (TDZ crash otherwise).
- *
- * NOTE: ZONE_ID_CACHE in visits.ts is module-scoped and persists across tests
- * in a file; the first transition test warms it, later tests rely on the cache
- * (which also proves the cache path works without a zones query).
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { PoolClient } from 'pg';
@@ -29,10 +39,31 @@ import { assertRole } from '@/lib/auth';
 import { audit } from '@/lib/audit';
 import { registerVisit, transitionVisit, acknowledgeNotification } from '@/lib/visits';
 
-const { poolQuerySpy, poolConnectSpy } = vi.hoisted(() => ({
-  poolQuerySpy: vi.fn(async () => ({ rows: [], rowCount: 0 })),
-  poolConnectSpy: vi.fn()
-}));
+/**
+ * Shape returned by every scripted query. Declared once and used for BOTH the
+ * fake clients and the pool spy so fixtures are checked at compile time.
+ */
+interface QueryResult {
+  rows: Record<string, unknown>[];
+  rowCount: number;
+}
+
+const EMPTY_RESULT: QueryResult = { rows: [], rowCount: 0 };
+
+const { poolQuerySpy, poolConnectSpy } = vi.hoisted(() => {
+  const poolQuerySpy = vi.fn(
+    async (_sql: string, _params?: unknown[]): Promise<QueryResult> => ({
+      rows: [],
+      rowCount: 0
+    })
+  );
+  const poolConnectSpy = vi.fn(async (): Promise<PoolClient> => {
+    throw new Error(
+      'unexpected pool.connect(): a connection checkout was attempted that this test did not mock'
+    );
+  });
+  return { poolQuerySpy, poolConnectSpy };
+});
 
 vi.mock('pg', () => {
   class Pool {
@@ -56,15 +87,9 @@ vi.mock('next/navigation', () => ({
   redirect: (url: string) => url
 }));
 
-/** Row shape returned by our scripted clients. */
-interface FakeResult {
-  rows: Record<string, unknown>[];
-  rowCount: number;
-}
-
 interface Step {
   match: RegExp;
-  result: FakeResult | Error;
+  result: QueryResult | Error;
 }
 
 interface CapturedCall {
@@ -81,10 +106,10 @@ interface CapturedCall {
 function fakeClient(steps: Step[]) {
   const calls: CapturedCall[] = [];
   const client = {
-    async query(sql: string, params?: unknown[]): Promise<FakeResult> {
+    async query(sql: string, params?: unknown[]): Promise<QueryResult> {
       calls.push({ sql, params: params ?? [] });
       const step = steps.find((s) => s.match.test(sql));
-      if (!step) return { rows: [], rowCount: 0 };
+      if (!step) return EMPTY_RESULT;
       if (step.result instanceof Error) throw step.result;
       return step.result;
     },
@@ -93,13 +118,25 @@ function fakeClient(steps: Step[]) {
   return { client, calls };
 }
 
+/**
+ * Guarded indexed access for noUncheckedIndexedAccess: throws a descriptive
+ * error when the element is absent, so a violated expectation surfaces as a
+ * test failure — never silently undefined, and without `as any` or ! hacks.
+ */
+function at<T>(arr: readonly T[], index: number, what: string): T {
+  const value = arr[index];
+  if (value === undefined) {
+    throw new Error(`Expected ${what} at index ${index}, but the array has ${arr.length} element(s).`);
+  }
+  return value;
+}
+
 const asTx = (c: unknown) => c as PoolClient;
 const asExec = (c: unknown) => c as QueryExecutor;
 
 const UUID = '11111111-1111-1111-1111-111111111111';
-const OK: FakeResult = { rows: [], rowCount: 0 };
 
-const ZONE_ROW: FakeResult = { rows: [{ id: UUID }], rowCount: 1 };
+const ZONE_ROW: QueryResult = { rows: [{ id: UUID }], rowCount: 1 };
 
 const SECURITY_PROFILE = {
   id: 'user-uuid-1',
@@ -117,8 +154,16 @@ const LOCKED_VISIT = {
 
 beforeEach(() => {
   poolQuerySpy.mockReset();
-  poolQuerySpy.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+  poolQuerySpy.mockImplementation(async (_sql: string, _params?: unknown[]): Promise<QueryResult> => ({
+    rows: [],
+    rowCount: 0
+  }));
   poolConnectSpy.mockReset();
+  poolConnectSpy.mockImplementation(async (): Promise<PoolClient> => {
+    throw new Error(
+      'unexpected pool.connect(): a connection checkout was attempted that this test did not mock'
+    );
+  });
 });
 
 // ── 1 · withTransaction ────────────────────────────────────────────
@@ -205,14 +250,14 @@ describe('transaction-client propagation', () => {
     expect(profile.role).toBe('PARKING_OPERATOR');
     expect(poolQuerySpy).not.toHaveBeenCalled();
     expect(calls.length).toBe(1);
-    expect(calls[0].sql).toContain('from profiles');
+    expect(at(calls, 0, 'profile query call').sql).toContain('from profiles');
   });
 
   it('assertRole without a client still works via the pool (standalone calls)', async () => {
     poolQuerySpy.mockResolvedValueOnce({
       rows: [{ ...SECURITY_PROFILE, role: 'PARKING_OPERATOR' }],
       rowCount: 1
-    } as FakeResult);
+    });
 
     const { profile } = await assertRole(['PARKING_OPERATOR']);
     expect(profile.role).toBe('PARKING_OPERATOR');
@@ -235,7 +280,7 @@ describe('transaction-client propagation', () => {
 
     await audit('u1', 'TEST_ACT', 't', 'x', { a: 1 }, asExec(client));
     expect(calls.length).toBe(1);
-    expect(calls[0].sql).toContain('insert into audit_logs');
+    expect(at(calls, 0, 'audit insert call').sql).toContain('insert into audit_logs');
     expect(poolQuerySpy).not.toHaveBeenCalled();
 
     await audit('u1', 'TEST_ACT', 't', 'x', { a: 1 });
@@ -267,7 +312,7 @@ describe('registerVisit connection behavior', () => {
     const { client, calls } = fakeClient([
       { match: /from companies/, result: { rows: [{ id: UUID }], rowCount: 1 } },
       { match: /insert into vehicles/, result: { rows: [{ id: UUID }], rowCount: 1 } },
-      { match: /where idempotency_key = /, result: OK }, // fast path: not found
+      { match: /where idempotency_key = /, result: EMPTY_RESULT }, // fast path: not found
       {
         match: /insert into vehicle_visits/,
         result: { rows: [{ id: UUID, visit_code: 'V-20260101-ABCDEF' }], rowCount: 1 }
@@ -287,9 +332,11 @@ describe('registerVisit connection behavior', () => {
     const sqls = calls.map((c) => c.sql);
     const auditIdx = sqls.findIndex((s) => s.includes('insert into audit_logs'));
     expect(auditIdx).toBeGreaterThan(-1);
-    expect(sqls[sqls.length - 1]).toBe('COMMIT'); // audit row committed with the txn
+    expect(at(sqls, sqls.length - 1, 'last transaction statement')).toBe('COMMIT'); // audit committed with the txn
     // REGISTER_VISIT audit params: actor, action, table, targetId, json
-    expect(calls[auditIdx].params[1]).toBe('REGISTER_VISIT');
+    expect(at(at(calls, auditIdx, 'audit insert call').params, 1, 'audit action param')).toBe(
+      'REGISTER_VISIT'
+    );
   });
 
   it('resolves a same-key retry to the original visit (idempotent)', async () => {
@@ -352,10 +399,13 @@ describe('transitionVisit connection behavior', () => {
 
     const auditIdx = sqls.findIndex((s) => s.includes('insert into audit_logs'));
     expect(auditIdx).toBeGreaterThan(-1);
-    expect(sqls[auditIdx + 1]).toBe('COMMIT'); // audit committed WITH the txn
+    expect(at(sqls, auditIdx + 1, 'statement after the audit insert')).toBe('COMMIT'); // audit committed WITH the txn
     // TRANSITION_VISIT audit params: actor, action, table, targetId, details-json
-    expect(calls[auditIdx].params[1]).toBe('TRANSITION_VISIT');
-    const details = JSON.parse(String(calls[auditIdx].params[4])) as Record<string, unknown>;
+    const auditCall = at(calls, auditIdx, 'audit insert call');
+    expect(at(auditCall.params, 1, 'audit action param')).toBe('TRANSITION_VISIT');
+    const details = JSON.parse(
+      String(at(auditCall.params, 4, 'audit details json param'))
+    ) as Record<string, unknown>;
     expect(details.from).toBe('WAITING_FOR_SECURITY');
     expect(details.to).toBe('AT_SECURITY');
     expect(details.reason).toBeNull();
@@ -377,7 +427,7 @@ describe('transitionVisit connection behavior', () => {
     const sqls = calls.map((c) => c.sql);
     expect(sqls.some((s) => s.includes('insert into audit_logs'))).toBe(false);
     expect(sqls.some((s) => s.includes('insert into notifications'))).toBe(false);
-    expect(sqls[sqls.length - 1]).toBe('ROLLBACK');
+    expect(at(sqls, sqls.length - 1, 'last transaction statement')).toBe('ROLLBACK');
     expect(poolQuerySpy).not.toHaveBeenCalled();
     expect(client.release).toHaveBeenCalled();
   });
@@ -422,17 +472,18 @@ describe('transitionVisit connection behavior', () => {
 describe('acknowledgeNotification still uses the pool (non-transactional)', () => {
   it('runs its update through pool.query, not a transaction', async () => {
     // TWO pool calls happen in order: (1) assertRole profile read, then
-    // (2) the notification update. Queue both responses.
+    // (2) the notification update. Queue both responses — typed literals,
+    // checked against QueryResult at compile time (no casts needed).
     poolQuerySpy
-      .mockResolvedValueOnce({ rows: [SECURITY_PROFILE], rowCount: 1 } as FakeResult)
-      .mockResolvedValueOnce({ rows: [], rowCount: 1 } as FakeResult);
+      .mockResolvedValueOnce({ rows: [SECURITY_PROFILE], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
     await expect(acknowledgeNotification(UUID)).resolves.toBeUndefined();
     expect(poolQuerySpy).toHaveBeenCalledTimes(2);
     expect(poolConnectSpy).not.toHaveBeenCalled();
 
-    const firstSql = poolQuerySpy.mock.calls[0][0] as string;
-    const secondSql = poolQuerySpy.mock.calls[1][0] as string;
+    const firstSql = at(poolQuerySpy.mock.calls, 0, 'first pool call')[0];
+    const secondSql = at(poolQuerySpy.mock.calls, 1, 'second pool call')[0];
     expect(firstSql).toContain('from profiles');
     expect(secondSql).toContain('update notifications');
     expect(secondSql).toContain('acknowledged_at = now()');
