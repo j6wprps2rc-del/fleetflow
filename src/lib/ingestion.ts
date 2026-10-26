@@ -5,20 +5,27 @@
  * SECURITY MODEL
  * - Gateways authenticate with a per-gateway API key. Only a SHA-256 hash of
  *   the key is stored; the plaintext is shown once at creation/rotation.
- * - The key is compared with a constant-time comparison (timingSafeEqual) so
- *   identical-prefix keys cannot leak information.
+ * - The submitted key is hashed, the stored hash is looked up, and the two
+ *   hex digests are compared with timingSafeEqual — constant-time, so
+ *   lookups cannot leak timing information.
  * - Ingestion NEVER advances the employee-confirmed workflow. A device
- *   detection only updates (a) the append-only gate_movements history with
- *   method = 'DEVICE_DETECTION' and (b) the visit's last_detected_* fields.
- *   The workflow status is changed exclusively by authorized employees via
- *   transitionVisit. This preserves the product rule that manual confirmation
- *   and electronic detection are two different things.
- * - Reads of gateway configuration go through the app's server actions with
- *   assertRole; the gateway API route authenticates via the key alone (it is
- *   machine-to-machine and has no Supabase session).
+ *   detection only appends to gate_movements (method DEVICE_DETECTION) and
+ *   updates the visit's last_detected_* fields. The workflow status is
+ *   changed exclusively by authorized employees via transitionVisit.
+ * - All writes run inside ONE withTransaction call; the transaction client
+ *   is used for every query (pool-starvation discipline preserved).
  *
- * HONESTY LABEL: SIMULATED detections use method = 'SIMULATED' and are marked
- * as such everywhere they are displayed. No real BLE hardware is claimed.
+ * MOVEMENT RECORDING RULE (anti-spam):
+ * - First detection or a zone CHANGE appends a gate_movements row
+ *   (direction ENTRY into the detected zone — a single receiver ping cannot
+ *   reliably infer a physical EXIT, so devices never record EXIT; exits are
+ *   recorded by manual workflow transitions).
+ * - Repeated same-zone pings only refresh last_detected_at (heartbeat),
+ *   keeping the append-only history free of noise.
+ *
+ * HONESTY LABEL: simulator detections use method = 'SIMULATED' and are
+ * labeled as simulated everywhere they are displayed. No real BLE hardware
+ * is claimed by this repository.
  */
 import 'server-only';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -39,6 +46,8 @@ export interface DetectionInput {
   gatewayKey: string;
   bleTagId: string;
   occurredAt?: string;
+  /** Simulator flag: records method='SIMULATED' instead of DEVICE_DETECTION. */
+  simulated?: boolean;
 }
 
 export class GatewayAuthError extends Error {
@@ -62,7 +71,6 @@ const KEY_RANDOM_BYTES = 24;
 
 /** Generates a new gateway key. Returns [plaintext (shown once), sha256 hash]. */
 export function generateGatewayKey(): [string, string] {
-  // Generated locally with crypto; no external dependency needed.
   const bytes = new Uint8Array(KEY_RANDOM_BYTES);
   crypto.getRandomValues(bytes);
   const body = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -74,8 +82,8 @@ export function hashGatewayKey(plaintext: string): string {
   return createHash('sha256').update(plaintext, 'utf8').digest('hex');
 }
 
-/** Constant-time comparison of two hex digests. */
-function keysMatch(a: string, b: string): boolean {
+/** Constant-time comparison of two equal-length strings. */
+function digestsMatch(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   try {
     return timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
@@ -119,16 +127,17 @@ export async function createGateway(
       [zoneCode]
     );
     if (zone.rowCount === 0) throw new Error('Zone not found.');
+    const zoneId = (zone.rows[0] as { id: string }).id;
 
-    let inserted: { id: string };
+    let gatewayId: string;
     try {
       const res = await client.query(
         `insert into gateways (label, zone_id, api_key_hash)
          values ($1, $2, $3)
          returning id::text as id`,
-        [label, (zone.rows[0] as { id: string }).id, hash]
+        [label, zoneId, hash]
       );
-      inserted = res.rows[0] as { id: string };
+      gatewayId = (res.rows[0] as { id: string }).id;
     } catch (err) {
       const pgErr = err as { code?: string };
       if (pgErr?.code === '23505') {
@@ -141,12 +150,12 @@ export async function createGateway(
       actorId,
       'CREATE_GATEWAY',
       'gateways',
-      inserted.id,
+      gatewayId,
       { label, zoneCode },
       client
     );
 
-    return { gatewayId: inserted.id, plaintextKey: plaintext };
+    return { gatewayId, plaintextKey: plaintext };
   });
 }
 
@@ -194,103 +203,96 @@ export async function setGatewayActive(
 
 // ── ingestion ─────────────────────────────────────────────────
 
-export interface IngestResult {
-  ok: true;
-  visitId: string;
-  visitCode: string;
+interface AuthenticatedGateway {
+  id: string;
+  zoneId: string;
   zoneCode: string;
-  direction: 'ENTRY' | 'EXIT';
-  simulated: boolean;
-}
-
-export interface IngestUnknownTagResult {
-  ok: false;
-  reason: 'unknown_tag';
-  bleTagId: string;
 }
 
 /**
- * Authenticates a gateway by its key and resolves its zone. Constant-time
- * hash comparison. Returns the gateway row (id, zoneId, zoneCode, simulated).
+ * Authenticates a gateway by its key on the given connection. Looks up the
+ * SHA-256 hash row, then compares the stored hash with the computed hash in
+ * constant time. Inactive or unknown keys are rejected identically.
  */
 async function authenticateGateway(
   client: QueryExecutor,
   gatewayKey: string
-): Promise<{
-  id: string;
-  zoneId: string;
-  zoneCode: string;
-  isSimulated: boolean;
-}> {
-  const hash = hashGatewayKey(gatewayKey ?? '');
+): Promise<AuthenticatedGateway> {
+  const computedHash = hashGatewayKey(gatewayKey ?? '');
   const result = await client.query(
-    `select g.id::text as id, g.zone_id::text as zone_id, g.is_active,
-            z.code::text as zone_code, z.name as zone_name
+    `select g.id::text as id, g.zone_id::text as zone_id, g.api_key_hash,
+            g.is_active, z.code::text as zone_code
        from gateways g
        join zones z on z.id = g.zone_id
       where g.api_key_hash = $1`,
-    [hash]
+    [computedHash]
   );
   const row = result.rows[0] as
-    | { id: string; zone_id: string; is_active: boolean; zone_code: string }
+    | { id: string; zone_id: string; api_key_hash: string; is_active: boolean; zone_code: string }
     | undefined;
-  // Constant-time: verify the hash matches even when the row is missing.
-  if (!row || !row.is_active || !keysMatch(row.id, row.id)) {
+  if (!row || !row.is_active || !digestsMatch(computedHash, row.api_key_hash)) {
     throw new GatewayAuthError('Invalid or inactive gateway key.');
   }
-  return {
-    id: row.id,
-    zoneId: row.zone_id,
-    zoneCode: row.zone_code,
-    isSimulated: false
-  };
+  return { id: row.id, zoneId: row.zone_id, zoneCode: row.zone_code };
 }
 
+export type IngestResult =
+  | {
+      ok: true;
+      visitId: string;
+      visitCode: string;
+      zoneCode: string;
+      moved: boolean;
+      simulated: boolean;
+    }
+  | { ok: false; reason: 'unknown_tag'; bleTagId: string }
+  | { ok: false; reason: 'no_active_visit'; vehicleId: string };
+
 /**
- * Ingests one BLE tag detection from a gateway and records it against the
- * ACTIVE visit of the vehicle bound to that tag, if any.
+ * Ingests one BLE tag detection from a gateway, against the ACTIVE visit of
+ * the vehicle bound to that tag (if any).
  *
- * - Unknown tag: returned as a typed result (not an error) — an empty yard
- *   legitimately contains vehicles that are not part of any visit.
- * - No active visit: typed result as well.
- * - Movement row: method DEVICE_DETECTION (or SIMULATED when the gateway is
- *   flagged as a simulator — future-proofing; current gateways are physical).
- * - last_detected_zone_id/last_detected_at are updated on the visit.
- * - The workflow status is NEVER touched here.
+ * - Unknown tag or no active visit: typed results, not errors — a yard
+ *   legitimately contains unvisited vehicles.
+ * - Zone change / first detection: appends a DEVICE_DETECTION (or SIMULATED)
+ *   movement row + updates last_detected_*.
+ * - Same-zone re-ping: refreshes last_detected_at only (heartbeat, no new
+ *   history row).
+ * - The workflow status is NEVER touched; audit_logs is not written for
+ *   machine detections — gate_movements IS the append-only record for
+ *   detections (audit_logs covers human/privileged actions).
+ * - All work happens in ONE withTransaction; every query uses `client`.
  */
-export async function ingestDetection(input: DetectionInput): Promise<
-  | (IngestResult & { detectedAt: string })
-  | IngestUnknownTagResult
-  | { ok: false; reason: 'no_active_visit'; vehicleId: string }
-> {
+export async function ingestDetection(input: DetectionInput): Promise<IngestResult> {
   const tag = input.bleTagId?.trim();
   if (!tag || tag.length < 2 || tag.length > 64) {
     throw new DetectionError('bleTagId must be between 2 and 64 characters.');
   }
 
   return withTransaction(async (client) => {
+    // 1 · Authenticate the gateway (constant-time hash comparison).
     const gateway = await authenticateGateway(client, input.gatewayKey);
 
-    // Update gateway liveness heartbeat.
+    // 2 · Liveness heartbeat.
     await client.query('update gateways set last_seen_at = now() where id = $1', [
       gateway.id
     ]);
 
+    // 3 · Resolve the tag to a vehicle.
     const vehicle = await client.query(
-      `select v.id::text as id
-         from vehicles
-        where ble_tag_id = $1`,
+      'select id::text as id from vehicles where ble_tag_id = $1',
       [tag]
     );
-    const vehicleRow = vehicle.rows[0] as { id: string } | undefined;
+    vehicleRow = vehicle.rows[0] as { id: string } | undefined;
     if (!vehicleRow) {
       return { ok: false as const, reason: 'unknown_tag' as const, bleTagId: tag };
     }
 
-    // Lock the vehicle's ACTIVE visit if one exists (FOR UPDATE serializes
-    // concurrent detections + transitions on the same visit).
+    // 4 · Lock the vehicle's ACTIVE visit (FOR UPDATE serializes concurrent
+    //    detections and transitions on the same visit row).
     const visit = await client.query(
-      `select id::text as id, visit_code, status::text as status
+      `select id::text as id, visit_code,
+              last_detected_zone_id::text as last_zone
          from vehicle_visits
         where vehicle_id = $1
           and status not in ('COMPLETED', 'REJECTED', 'CANCELLED')
@@ -300,37 +302,34 @@ export async function ingestDetection(input: DetectionInput): Promise<
       [vehicleRow.id]
     );
     const visitRow = visit.rows[0] as
-      | { id: string; visit_code: string; status: string }
+      | { id: string; visit_code: string; last_zone: string | null }
       | undefined;
     if (!visitRow) {
-      return { ok: false as const, reason: 'no_active_visit' as const, vehicleId: vehicleRow.id };
+      return {
+        ok: false as const,
+        reason: 'no_active_visit' as const,
+        vehicleId: vehicleRow.id
+      };
     }
 
-    // Direction is inferred: ENTRY when the detection zone differs from the
-    // visit's current last-detected zone, EXIT when it is the same zone being
-    // re-seen (a repeated same-zone ping keeps the vehicle marked present).
-    const current = await client.query(
-      `select last_detected_zone_id::text as zone
-         from vehicle_visits where id = $1`,
-      [visitRow.id]
-    );
-    const prevZone = (current.rows[0] as { zone: string | null } | undefined)?.zone ?? null;
-    const direction: 'ENTRY' | 'EXIT' = prevZone === gateway.zoneId ? 'EXIT' : 'ENTRY';
+    const zoneChanged = visitRow.last_zone !== gateway.zoneId;
+    if (zoneChanged) {
+      // First detection or zone change → append the movement row (ENTRY only;
+      // a single receiver cannot infer a physical EXIT — exits come from the
+      // manual workflow transitions).
+      await client.query(
+        `insert into gate_movements (visit_id, zone_id, direction, method, occurred_at)
+         values ($1, $2, 'ENTRY', $3, $4)`,
+        [
+          visitRow.id,
+          gateway.zoneId,
+          input.simulated ? 'SIMULATED' : 'DEVICE_DETECTION',
+          input.occurredAt ? new Date(input.occurredAt) : new Date()
+        ]
+      );
+    }
 
-    // Append-only movement record. method = DEVICE_DETECTION for physical
-    // gateways; the simulator uses 'SIMULATED' via the flagged path.
-    await client.query(
-      `insert into gate_movements (visit_id, zone_id, direction, method, occurred_at)
-       values ($1, $2, $3, $4, $5)`,
-      [
-        visitRow.id,
-        gateway.zoneId,
-        direction,
-        gateway.isSimulated ? 'SIMULATED' : 'DEVICE_DETECTION',
-        input.occurredAt ? new Date(input.occurredAt) : new Date()
-      ]
-    );
-
+    // 5 · Always refresh the last-detection fields (heartbeat on re-pings).
     await client.query(
       `update vehicle_visits
           set last_detected_zone_id = $2,
@@ -339,19 +338,13 @@ export async function ingestDetection(input: DetectionInput): Promise<
       [visitRow.id, gateway.zoneId]
     );
 
-    // No audit() call here: gate_movements IS the append-only record for
-    // device detections (audit_logs is for human/privileged actions).
-    await client.query('COMMIT');
-    await client.query('BEGIN');
-
     return {
       ok: true as const,
       visitId: visitRow.id,
       visitCode: visitRow.visit_code,
       zoneCode: gateway.zoneCode,
-      direction,
-      simulated: gateway.isSimulated,
-      detectedAt: new Date().toISOString()
+      moved: zoneChanged,
+      simulated: input.simulated === true
     };
   });
 }
