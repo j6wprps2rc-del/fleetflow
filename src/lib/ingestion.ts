@@ -283,7 +283,7 @@ export async function ingestDetection(input: DetectionInput): Promise<IngestResu
       'select id::text as id from vehicles where ble_tag_id = $1',
       [tag]
     );
-    vehicleRow = vehicle.rows[0] as { id: string } | undefined;
+    const vehicleRow = vehicle.rows[0] as { id: string } | undefined;
     if (!vehicleRow) {
       return { ok: false as const, reason: 'unknown_tag' as const, bleTagId: tag };
     }
