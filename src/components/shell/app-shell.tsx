@@ -41,7 +41,7 @@ export function AppShell({
       <aside
         className={`flex flex-col border-r border-ff-border bg-ff-surface transition-all duration-200 ${
           collapsed ? 'w-16' : 'w-60'
-        }`
+        }`}
       >
         <div className="flex h-14 items-center gap-2 border-b border-ff-border px-4">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ff-cyan/30 bg-ff-cyan/10 text-xs font-bold text-ff-cyan">

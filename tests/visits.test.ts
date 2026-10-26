@@ -320,6 +320,6 @@ describe('acknowledgeNotification query binding (regression for swapped params)'
     const params = visitsSrc.match(
       /update notifications[\s\S]*?and acknowledged_at is null`,\s*\[([^\]]*)\]/,
     )?.[1] ?? '';
-    expect(params.replace(/\s/g, '')).toBe('[profile.id,notificationId,profile.role]');
+    expect(params.replace(/\s/g, '')).toBe('profile.id,notificationId,profile.role');
   });
 });
