@@ -12,12 +12,16 @@
  *     on active visits per vehicle. Unique-violation races (two concurrent
  *     inserts) are caught and resolved to the original/conflict result instead
  *     of surfacing a raw DB error.
+ *
+ * Connection policy (pool-starvation fix): ALL queries inside withTransaction
+ * bodies — including assertRole (authorization against the post-lock state) and
+ * audit writes — run on the transaction client passed to those helpers, never
+ * through the global pool. On Vercel (pool max 1) mixing the two deadlocks.
  */
 import 'server-only';
-import { withTransaction, pool } from '@/db';
+import { withTransaction, pool, type QueryExecutor } from '@/db';
 import { audit } from '@/lib/audit';
-import { assertRole, getCurrentUser, PermissionError } from '@/lib/auth';
-import { isAppRole } from '@/lib/rbac';
+import { assertRole, PermissionError } from '@/lib/auth';
 import { canTransition, isWorkflowStatus, requiresReason, type WorkflowStatus } from '@/lib/workflow';
 import { normalizePlate, validatePlate } from '@/lib/plate';
 import {
@@ -94,7 +98,7 @@ export async function findActiveVisitForPlate(
  *
  * Concurrency: two racing requests cannot both create an active visit — the
  * DB partial unique indexes are the source of truth, and 23505 races are
- * resolved to the typed results below rather than raw errors.
+ * resolved to the typed results below rather than surfacing raw errors.
  */
 export async function registerVisit(
   input: unknown,
@@ -243,11 +247,18 @@ export async function registerVisit(
       throw err;
     }
 
-    await audit(context.userId, 'REGISTER_VISIT', 'vehicle_visits', visit.id, {
-      plate: plate.normalized,
-      companyId,
-      idempotencyKey: data.idempotencyKey
-    });
+    await audit(
+      context.userId,
+      'REGISTER_VISIT',
+      'vehicle_visits',
+      visit.id,
+      {
+        plate: plate.normalized,
+        companyId,
+        idempotencyKey: data.idempotencyKey
+      },
+      client
+    );
 
     return {
       ok: true as const,
@@ -261,10 +272,7 @@ export async function registerVisit(
 
 const ZONE_ID_CACHE: Partial<Record<ZoneCode, string>> = {};
 
-async function zoneIdFor(
-  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> },
-  zone: ZoneCode
-): Promise<string> {
+async function zoneIdFor(client: QueryExecutor, zone: ZoneCode): Promise<string> {
   if (ZONE_ID_CACHE[zone]) return ZONE_ID_CACHE[zone]!;
   const result = await client.query(
     'select id::text as id from zones where code = $1',
@@ -280,21 +288,20 @@ async function zoneIdFor(
  * Performs a workflow transition with full server-side authorization and
  * transactional safety. Order of operations inside the transaction:
  *   1. SELECT ... FOR UPDATE the visit row (serializes concurrent transitions)
- *   2. Authorization against the CURRENT (post-lock) state via assertRole
+ *   2. Authorization against the CURRENT (post-lock) state via assertRole,
+ *      running on the transaction connection (no second pool checkout)
  *   3. State-machine validation AFTER the lock
  *   4. Insert gate_movements for the transition's effects
  *   5. Update the visit status
  *   6. Insert notifications for the target roles
+ *   7. Append-only TRANSITION_VISIT audit entry (same transaction)
  * Any failure rolls back everything — no partial movement records remain.
  *
- * Note on the assertRole connection: assertRole verifies the session via the
- * Supabase client and reads the profile via the pool (a separate connection),
- * while this transaction holds the visit row lock. That is safe here: the
- * authorization decision depends only on immutable-in-this-request data
- * (session + profile role), never on the locked row, and the state machine
- * re-check after the lock is what actually prevents double transitions. There
- * is no lock-ordering deadlock risk because each transaction locks exactly one
- * row before any other query.
+ * Note on the assertRole connection: assertRole now receives the transaction
+ * client, so the profile read runs on the SAME connection that holds the visit
+ * row lock. The authorization decision still depends only on request-scoped
+ * data (session + profile), never on the locked row — no deadlock risk, and
+ * each transaction locks exactly one row before any other query.
  */
 export async function transitionVisit(input: unknown): Promise<{ visitId: string; from: WorkflowStatus; to: WorkflowStatus }> {
   const parsed = transitionVisitSchema.safeParse(input);
@@ -310,7 +317,7 @@ export async function transitionVisit(input: unknown): Promise<{ visitId: string
       `select id::text as id, status::text as status, visit_code
          from vehicle_visits
         where id = $1
-        for update`,
+         for update`,
       [data.visitId]
     );
     const visit = lockResult.rows[0] as
@@ -321,9 +328,10 @@ export async function transitionVisit(input: unknown): Promise<{ visitId: string
     const current = visit.status;
     if (!isWorkflowStatus(current)) throw new Error('Visit has an unknown status.');
 
-    // 2 · Authorization is enforced per transition against the CURRENT state.
+    // 2 · Authorization is enforced per transition against the CURRENT state,
+    // on the transaction connection (Vercel pool max 1 — no second checkout).
     const authorized = authorizedRolesForTransition(current, target);
-    const { profile } = await assertRole(authorized);
+    const { profile } = await assertRole(authorized, client);
 
     // 3 · State-machine validation AFTER the lock (not before) — this is what
     // makes two concurrent conflicting transitions impossible.
@@ -372,6 +380,20 @@ export async function transitionVisit(input: unknown): Promise<{ visitId: string
         ]
       );
     }
+
+    // 7 · Append-only audit entry for the transition (same transaction).
+    await audit(
+      profile.id,
+      'TRANSITION_VISIT',
+      'vehicle_visits',
+      visit.id,
+      {
+        from: current,
+        to: target,
+        reason: data.reason ?? null
+      },
+      client
+    );
 
     return { visitId: visit.id, from: current, to: target };
   });
