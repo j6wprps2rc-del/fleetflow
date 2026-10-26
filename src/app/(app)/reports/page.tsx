@@ -1,7 +1,7 @@
-import { requireUser } from '@/lib/auth';
-import { pool } from '@/db';
-import { canViewReports } from '@/lib/rbac';
 import { redirect } from 'next/navigation';
+import { requireUser } from '@/lib/auth';
+import { canViewReports } from '@/lib/rbac';
+import { pool } from '@/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -130,7 +130,6 @@ export default async function ReportsPage() {
           <h2 className="text-sm font-semibold text-white">Zone activity — last 7 days</h2>
           {zoneActivity.length === 0 ? (
             <p className="mt-4 text-sm text-slate-500">No movements recorded in the last 7 days.</p>
-            <p className="mt-2 text-[10px] text-slate-500">No movements recorded in the last 7 days.</p>
           ) : (
             <ul className="mt-4 flex flex-col gap-2">
               {zoneActivity.map((z) => (
@@ -169,7 +168,6 @@ export default async function ReportsPage() {
                   </tr>
                 ))}
               </tbody>
-
             </table>
           </div>
         )}
