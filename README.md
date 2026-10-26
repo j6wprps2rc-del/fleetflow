@@ -3,15 +3,17 @@
 Industrial vehicle-entry, zone-tracking and gate-management platform built with
 **Next.js 14 (App Router) + TypeScript strict + Tailwind CSS** and **Supabase PostgreSQL**.
 
-> **Status — Checkpoint 3 complete on `feature/visit-workflow`** (not yet merged to main).
-> Implemented: Supabase Auth + middleware route protection, server-side RBAC, dashboard,
-> user management, audit trail viewer, visit registration (duplicate- and idempotency-safe),
-> transactional workflow transitions with row locks and post-lock state re-validation,
-> append-only gate movements, role-targeted notifications with trigger-enforced
-> acknowledgement semantics, notifications inbox, visits list/search/pagination,
-> visit details + timeline. **Not implemented:** BLE/device ingestion, gateway registry,
-> device simulator, reports/analytics pages. **No real GPS or BLE hardware tracking is
-> claimed anywhere in this system.**
+> **Status — Checkpoints 1–5 implemented on `fix/transaction-pool-starvation`** (not yet
+> merged to `main`; review pending). Implemented: Supabase Auth + middleware route
+> protection, server-side RBAC, dashboard, user management, audit trail viewer, visit
+> registration (duplicate- and idempotency-safe), transactional workflow transitions with
+> row locks + post-lock state re-validation, append-only gate movements, role-targeted
+> notifications with trigger-enforced acknowledgement, visits list/search/pagination,
+> visit details + timeline, **BLE gateway registry + ingestion API** (`POST /api/ingest`),
+> **clearly-labeled simulator** (SIMULATED method, SUPER_ADMIN only), and **reports &
+> analytics**. **Honest scope:** no real BLE hardware is connected; the simulator exists
+> for development/demo and every simulated row is labeled SIMULATED. No GPS tracking is
+> claimed anywhere.
 
 ## Tech stack
 
@@ -23,148 +25,109 @@ Industrial vehicle-entry, zone-tracking and gate-management platform built with
 | Database | Supabase PostgreSQL via `pg` (server-only; Drizzle available) |
 | Runtime connection | Supabase Transaction Pooler — port **6543** (SSL) |
 | Migration connection | Supabase direct — port **5432** |
-| Tests | Vitest (unit + static SQL characterization) |
+| Tests | Vitest (unit + behavioral fake-client + static SQL characterization) |
 
 ## Security model
 
-- **Server-side authorization is enforced in code** for every mutation: `requireUser`
-  (pages) and `assertRole` (server actions) verify the Supabase Auth session server-side
-  and read the role from the `profiles` table. UI hiding is cosmetic only.
-- **The app server connects as the privileged database role** (`DATABASE_URL`). That
-  role owns the schema and therefore **bypasses RLS**. This is intentional: all
-  authorization decisions are made in the app layer *before* the privileged query runs.
-  RLS policies exist as a second boundary for any direct Supabase-client (anon-key)
-  access, where they are fully enforced.
-- **Transitions**: `SELECT … FOR UPDATE` on the visit row, then role check against the
-  post-lock state, then state-machine re-validation — two concurrent conflicting
-  transitions cannot both apply. `gate_movements`, status update, audit entry, and
-  notifications are written in the same transaction (rollback removes all partial writes).
-- **Duplicate/idempotency**: DB partial unique indexes (one active visit per vehicle;
-  unique idempotency key) are the source of truth; application code resolves 23505
-  races to the typed results rather than surfacing raw errors.
-- **Notifications**: clients have **no** insert/update/delete privileges. Acknowledgement
-  runs through a server action that sets `acknowledged_at = now()` itself; a BEFORE UPDATE
-  trigger (`enforce_notification_ack`) enforces the same semantics at the DB layer for
-  every role, including forcing `now()` — a client cannot forge timestamps or alter
-  title/body/severity/target/visit/created fields.
-- **Append-only history**: `gate_movements` and `audit_logs` reject UPDATE/DELETE from
-  client roles; profiles are created exclusively by the auth trigger.
-
-### Verify on your live database (read-only)
-
-After applying migration 0003, run in the Supabase SQL Editor:
-
-```sql
--- Expect policies: notifications_read_own_role (select), notifications_ack_own_role (update)
-select policyname, polcmd from pg_policies
-where schemaname='public' and tablename='notifications';
-
--- Expect: no INSERT/UPDATE/DELETE granted to anon or authenticated
-select grantee, privilege_type from information_schema.role_table_grants
-where table_schema='public' and table_name='notifications' and grantee in ('anon','authenticated');
-
--- Expect: index definitions present (one-active-visit + idempotency)
-select indexname, indexdef from pg_indexes
-where schemaname='public' and tablename in ('notifications','vehicle_visits')
-order by tablename, indexname;
-```
+- **Server-side authorization everywhere** — `requireUser` (pages) and `assertRole`
+  (server actions) verify the session server-side and read the role from `profiles`.
+  UI hiding is cosmetic. Every gateway mutation also runs `assertRole(['SUPER_ADMIN'])`.
+- **The app server connects as the privileged DB role** (schema owner, bypasses RLS).
+  Authorization decisions are made in the app layer before the privileged query runs;
+  RLS is the enforced second boundary for anon-key client access.
+- **Transactions** — `SELECT … FOR UPDATE` + post-lock re-validation; gate movements,
+  status update, audit entries, and notifications are written in one transaction.
+  **Mandatory transactional audit:** a failed audit insert rolls back the whole operation;
+  standalone audit failures remain logged-and-non-fatal by design.
+- **Transaction-client discipline** — all queries inside `withTransaction` (including
+  `assertRole` and `audit`) run on the checked-out client; nothing inside a transaction
+  ever goes through the global pool (Vercel pool max 1 would otherwise deadlock).
+- **Gateway keys** — SHA-256 hashed at rest, constant-time comparison, plaintext shown
+  exactly once at creation/rotation, never stored client-side. Ingestion cannot advance
+  the workflow; it only records device evidence.
+- **Idempotency/duplicates** — DB partial unique indexes are the source of truth;
+  23505 races resolve to typed results.
 
 ## Setup
 
 ### 1 · Environment variables
 
-Copy `.env.example` → `.env` and fill from the Supabase dashboard
-(Project Settings → Database / API). Names (never commit real values):
+Copy `.env.example` → `.env` (Supabase dashboard → Project Settings → Database / API):
 
-- `DATABASE_URL` — **transaction pooler (port 6543)** — app runtime
-- `DATABASE_URL_MIGRATIONS` — **direct (port 5432)** — migrations only
+- `DATABASE_URL` — transaction pooler (**6543**) — app runtime
+- `DATABASE_URL_MIGRATIONS` — direct (**5432**) — migrations only
 - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- Optional: `SUPABASE_SERVICE_ROLE_KEY` (unused by the app), `FLEETFLOW_DEFAULT_TZ`
+- Optional: `FLEETFLOW_DEFAULT_TZ`
+
+Never commit real credentials. `SUPABASE_SERVICE_ROLE_KEY` is NOT used by this app.
 
 ### 2 · Install, migrate, verify
 
 ```bash
 npm install
-npm run db:migrate   # applies drizzle/*.sql in order via the DIRECT connection
-npm run db:verify    # read-only connection check (never prints secrets)
+npm run db:migrate   # applies drizzle/*.sql in order (0001 → 0004) via DIRECT connection
+npm run db:verify    # read-only connection check
 ```
 
-Migration 0003 has **not been applied yet**. It is additive-only, fully rerunnable
-(every policy/trigger uses drop-if-exists), and creates: the `notifications` table
-with role-targeted RLS + the acknowledgement-semantics trigger, the one-active-visit
-partial unique index, and the idempotency-key column + index.
-
-**Rollback strategy** (if ever needed, after approval only): 0003 adds no data
-transformations, so rollback is limited to `drop trigger/policies/indexes/table`
-in the reverse order of the file — no data is lost because no existing rows are touched.
+**Migration status (honest):** as of this commit, **0001 and 0002 are applied** to your
+Supabase project (verified earlier via db:verify). **0003 and 0004 are NOT applied yet**
+(0004 was authored in this session: gateways table, BLE tag binding, last-detection
+columns). Both are additive-only and rerunnable. Apply with `npm run db:migrate` after
+your review and explicit approval — nothing has been run against your database by the
+agent.
 
 ### 3 · First administrator
 
-1. Supabase dashboard → **Authentication → Users → Add user** (strong password).
-2. The `on_auth_user_created` trigger creates a `profiles` row with the least-privileged
-   `SUPERVISOR` role automatically.
-3. Promote yourself once in the SQL Editor:
-
-```sql
-update public.profiles set role = 'SUPER_ADMIN' where email = 'you@company.com';
-```
+1. Supabase → Authentication → Users → Add user.
+2. The `on_auth_user_created` trigger creates a least-privilege SUPERVISOR profile.
+3. Promote once: `update public.profiles set role = 'SUPER_ADMIN' where email = 'you@company.com';`
 
 ### 4 · Run & check
 
 ```bash
-npm run dev        # http://localhost:3000 → redirects to /login or /dashboard
+npm run dev        # http://localhost:3000
 npm run typecheck
 npm run lint
 npm run test
 npm run build
 ```
 
-### Testing scope (honest)
+## BLE ingestion — how it works
 
-`npm run test` runs unit + static characterization tests (no database needed):
-plate normalization, RBAC map, workflow state machine, SQL security properties
-of migrations 0002/0003, visit schemas, transition authorization matrix, gate
-movement mapping, acknowledge binding regression.
-
-**Not covered by automated tests:** runtime behavior of the acknowledgement
-trigger and RLS policies against a live database. These require an isolated
-integration test database; the postgres read-only connector is not connected
-in this environment, so this remains a documented gap.
+1. **SUPER_ADMIN** registers a gateway in **/simulator** (choose label + zone). The API
+   key is displayed once — save it immediately.
+2. Physical receivers POST to `POST /api/ingest` with header `x-api-key: <gateway key>`:
+   ```json
+   { "bleTagId": "TAG-001" }
+   ```
+   Responses: `200` with a typed result, `401` for a bad/inactive key (uniform),
+   `400` for malformed input.
+3. Vehicles are bound to tags via `vehicles.ble_tag_id` (set in SQL for now; a UI for tag
+   binding is a small follow-up).
+4. A detection appends `gate_movements` (method `DEVICE_DETECTION`) **only on first
+   detection or zone change**; repeated same-zone pings only refresh
+   `last_detected_at`. The workflow status is NEVER changed by a device — employees
+   confirm stages manually.
+5. The simulator (bottom of /simulator) sends detections through the exact same
+   pipeline with `method = 'SIMULATED'` — labeled everywhere, never mixed with device data.
 
 ## Deployment (Vercel)
 
-1. Import the repo; add `DATABASE_URL` (6543), `NEXT_PUBLIC_SUPABASE_URL`,
-   `NEXT_PUBLIC_SUPABASE_ANON_KEY` for Production/Preview/Development.
-   Add `DATABASE_URL_MIGRATIONS` only if running migrations from CI.
-2. Run `npm run db:migrate` from your machine once before the first deploy
-   that includes migration 0003 (with your approval first).
-3. Middleware-protected routes need the Supabase env vars at **build time** too.
-
-**Operational readiness disclaimer:** a passing `npm run build` is *code*
-readiness only. Production readiness additionally requires: migration 0003
-applied, admin bootstrap performed, live RLS verification queries run, and
-real user acceptance testing of the full workflow.
-
-## Troubleshooting
-
-- **Sign-in loops / redirect to /login**: `NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY`
-  missing at build time, or the middleware matcher excludes your route.
-- **`notifications` does not exist**: migration 0003 has not been applied —
-  run `npm run db:migrate` (transitions will fail with relation-not-found otherwise).
-- **Transition fails with "not allowed"**: another operator just moved the visit —
-  the UI shows the post-lock state; refresh.
-- **Duplicate registration conflict**: intended — a vehicle with an active visit
-  cannot start a second one; open the active visit from the error message link.
-- **Admin user management empty**: you must first promote yourself via SQL (step 3).
+Same env vars for Production/Preview/Development; middleware needs them at build time.
+Run `npm run db:migrate` (after approval) before the first deploy that includes 0003/0004.
+A passing build is code readiness only — production readiness additionally needs:
+migrations applied, admin bootstrap, live RLS verification (queries in README §Verify),
+and user acceptance testing of the full workflow + a real gateway key round-trip.
 
 ## Roadmap
 
 - [x] Checkpoint 1 — scaffold, schema, migrations, health check, test harness
 - [x] Checkpoint 2 — Auth, RBAC, app shell, dashboard, user management, audit
 - [x] Security review — hardened migrations 0001/0002 + SQL security tests
-- [x] Checkpoint 3 (branch) — visit registration, transitions, gate movements,
-      notifications, audit viewer, visits UI — **review pending, merge to main
-      requires explicit approval**
-- [ ] Checkpoint 4 — device ingestion API (BLE receivers), gateway registry,
-      clearly-labeled simulator
-- [ ] Checkpoint 5 — reports/analytics, history pages
+- [x] Checkpoint 3 — visit registration, transitions, gate movements, notifications,
+      audit viewer, visits UI
+- [x] Pool/transaction hardening — tx-client propagation, mandatory transactional audit
+- [x] Checkpoint 4 — gateway registry, BLE ingestion API, clearly-labeled simulator
+- [x] Checkpoint 5 — reports & analytics page
+- [ ] Your review → apply 0003/0004 → merge to `main` (explicit approval required)
+- [ ] Physical BLE hardware integration (external — needs real receivers on site)
