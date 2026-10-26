@@ -99,7 +99,7 @@ export function SimulatorPanel({ gateways }: { gateways: GatewayRow[] }) {
         ) : (
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-sm">
-              <shead>
+              <thead>
                 <tr className="border-b border-ff-border text-xs uppercase tracking-wider text-slate-500">
                   <th className="px-3 py-2">Label</th>
                   <th className="px-3 py-2">Zone</th>
@@ -136,7 +136,7 @@ export function SimulatorPanel({ gateways }: { gateways: GatewayRow[] }) {
                         <button
                           type="button"
                           disabled={pending}
-                                                   onClick={() => run(() => setGatewayActiveAction(g.id, !g.isActive))}
+                          onClick={() => run(() => setGatewayActiveAction(g.id, !g.isActive))}
                           className="rounded border border-ff-border px-2 py-1 text-xs text-slate-300 hover:border-ff-warning hover:text-ff-warning"
                         >
                           {g.isActive ? 'Deactivate' : 'Activate'}
@@ -169,7 +169,7 @@ export function SimulatorPanel({ gateways }: { gateways: GatewayRow[] }) {
             disabled={pending || tag.trim().length < 2}
             onClick={() =>
               run(async () => {
-                const key = window.prompt('Gateway key (paster the key you saved)');
+                const key = window.prompt('Gateway key (paste the key you saved)');
                 if (!key) {
                   return { ok: false, message: 'Simulation cancelled — no key provided.' };
                 }
