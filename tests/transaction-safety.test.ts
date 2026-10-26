@@ -17,6 +17,10 @@
  *
  * NOTE: spies used inside vi.mock factories MUST be created with vi.hoisted —
  * vi.mock is hoisted above ordinary const declarations (TDZ crash otherwise).
+ *
+ * NOTE: ZONE_ID_CACHE in visits.ts is module-scoped and persists across tests
+ * in a file; the first transition test warms it, later tests rely on the cache
+ * (which also proves the cache path works without a zones query).
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { PoolClient } from 'pg';
@@ -417,16 +421,26 @@ describe('transitionVisit connection behavior', () => {
 
 describe('acknowledgeNotification still uses the pool (non-transactional)', () => {
   it('runs its update through pool.query, not a transaction', async () => {
-    poolQuerySpy.mockResolvedValueOnce({ rows: [], rowCount: 1 } as FakeResult);
+    // TWO pool calls happen in order: (1) assertRole profile read, then
+    // (2) the notification update. Queue both responses.
+    poolQuerySpy
+      .mockResolvedValueOnceOnce?.(); // no-op guard for older vitest typings
+    poolQuerySpy.mockReset();
+    poolQuerySpy
+      .mockResolvedValueOnce({ rows: [SECURITY_PROFILE], rowCount: 1 } as FakeResult)
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 } as FakeResult);
 
     await expect(acknowledgeNotification(UUID)).resolves.toBeUndefined();
-    expect(poolQuerySpy).toHaveBeenCalledTimes(1);
+    expect(poolQuerySpy).toHaveBeenCalledTimes(2);
     expect(poolConnectSpy).not.toHaveBeenCalled();
-    const sql = poolQuerySpy.mock.calls[0][0] as string;
-    expect(sql).toContain('update notifications');
-    expect(sql).toContain('acknowledged_at = now()');
-    expect(sql).toContain('acknowledged_by = $1');
-    expect(sql).toContain('where id = $2');
-    expect(sql).toContain('target_role = $3');
+
+    const firstSql = poolQuerySpy.mock.calls[0][0] as string;
+    const secondSql = poolQuerySpy.mock.calls[1][0] as string;
+    expect(firstSql).toContain('from profiles');
+    expect(secondSql).toContain('update notifications');
+    expect(secondSql).toContain('acknowledged_at = now()');
+    expect(secondSql).toContain('acknowledged_by = $1');
+    expect(secondSql).toContain('where id = $2');
+    expect(secondSql).toContain('target_role = $3');
   });
 });
