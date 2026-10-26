@@ -116,9 +116,9 @@ const LOCKED_VISIT = {
 };
 
 beforeEach(() => {
-  poolQuerySpy.mockClear();
-  poolConnectSpy.mockClear();
+  poolQuerySpy.mockReset();
   poolQuerySpy.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
+  poolConnectSpy.mockReset();
 });
 
 // ── 1 · withTransaction ────────────────────────────────────────────
@@ -423,9 +423,6 @@ describe('acknowledgeNotification still uses the pool (non-transactional)', () =
   it('runs its update through pool.query, not a transaction', async () => {
     // TWO pool calls happen in order: (1) assertRole profile read, then
     // (2) the notification update. Queue both responses.
-    poolQuerySpy
-      .mockResolvedValueOnceOnce?.(); // no-op guard for older vitest typings
-    poolQuerySpy.mockReset();
     poolQuerySpy
       .mockResolvedValueOnce({ rows: [SECURITY_PROFILE], rowCount: 1 } as FakeResult)
       .mockResolvedValueOnce({ rows: [], rowCount: 1 } as FakeResult);
