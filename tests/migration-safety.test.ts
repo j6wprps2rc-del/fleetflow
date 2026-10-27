@@ -9,33 +9,19 @@
  * tests/sql-security.test.ts uses for migration SQL): they fail if the
  * exclusion is removed, renamed, or moved after the apply loop.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const runnerSrc = readFileSync(join(process.cwd(), 'scripts', 'migrate.ts'), 'utf8');
 
 const BLOCK_FILE = '0004_device_ingestion.sql';
-
-// The blocked file must actually exist in the repo for this guard to be
-// meaningful — if someone deletes the file, the block entry can be retired
-// deliberately along with this assertion.
-let drizzleDir: string[] = [];
-try {
-  drizzleDir = readdirSafe(join(process.cwd(), 'drizzle'));
-} catch {
-  drizzleDir = [];
-}
-
-function readdirSafe(dir: string): string[] {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const fs = require('node:fs') as typeof import('node:fs');
-  return fs.readdirSync(dir);
-}
+const drizzleDir = join(process.cwd(), 'drizzle');
 
 describe('migration runner safety (device-ingestion exclusion)', () => {
   it('the blocked migration file exists in drizzle/ (guard is meaningful)', () => {
-    expect(drizzleDir).toContain(BLOCK_FILE);
+    expect(existsSync(drizzleDir)).toBe(true);
+    expect(readdirSync(drizzleDir)).toContain(BLOCK_FILE);
   });
 
   it('runner declares a BLOCKED_MIGRATIONS list containing the device migration', () => {
@@ -52,5 +38,12 @@ describe('migration runner safety (device-ingestion exclusion)', () => {
 
   it('exclusion is announced, never silent', () => {
     expect(runnerSrc).toMatch(/! blocked/);
+  });
+
+  it('runner would otherwise see the blocked file (sorted order places it after 0003)', () => {
+    // If the blocked file were ever the ONLY sql file, the filtered list is
+    // empty and the runner must not crash — covered by 'No applicable
+    // migration files' path.
+    expect(readdirSync(drizzleDir).filter((f) => f.endsWith('.sql')).length).toBeGreaterThanOrEqual(4);
   });
 });
