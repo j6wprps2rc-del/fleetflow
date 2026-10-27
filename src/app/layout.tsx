@@ -2,14 +2,24 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'FLEETFLOW — Smart Vehicle Movement System',
-  description: 'Industrial vehicle entry, zone tracking and gate management.'
+  title: 'فليت فلو — إدارة حركة العربيات',
+  description: 'نظام إدارة دخول العربيات وحركتها بين مناطق الشركة'
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+/**
+ * Egyptian-Arabic-first application: document language is Arabic and the
+ * layout direction is RTL. Latin technical values (plates, emails, IDs) are
+ * wrapped in dir="ltr" / unicode-bidi by the components that render them so
+ * mixed Arabic/Latin text never corrupts.
+ */
+export default function RootLayout({
+  children
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
-    <html lang="en" className="dark">
-      <body className="min-h-screen bg-ff-bg text-slate-100 antialiased">{children}</body>
+    <html lang="ar" dir="rtl">
+      <body className="antialiased">{children}</body>
     </html>
   );
 }
