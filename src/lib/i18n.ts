@@ -23,22 +23,42 @@ const MESSAGE_AR: Record<string, string> = {
   'Company not found or inactive.': 'الشركة دي مش موجودة أو موقوفة.',
   'A company name is required when creating a new company':
     'لازم تكتب اسم الشركة الجديدة.',
+  'Missing notification id.': 'بيانات الإشعار ناقصة.',
   'Plate must be between 2 and 20 characters.':
     'رقم اللوحة لازم يكون بين ٢ و٢٠ حرف.',
+  'Plate must be at least 2 characters.':
+    'رقم اللوحة قصير — الحد الأدنى ٢ حرف.',
+  'Plate must be at most 20 characters.':
+    'رقم اللوحة طويل — الحد الأقصى ٢٠ حرف.',
   'Plate contains invalid characters.':
     'رقم اللوحة فيه حروف غير مسموحة — استخدم أرقام وحروف بس.',
   'Plate cannot consist only of separators.':
     'رقم اللوحة مش ممكن يكون فاصلًا بس.',
   'Invalid plate.': 'رقم اللوحة غير صحيح.',
+  'Company name must be at least 2 characters.':
+    'اسم الشركة قصير — الحد الأدنى ٢ حرف.',
+  'Company name must be at most 160 characters.':
+    'اسم الشركة طويل — الحد الأقصى ١٦٠ حرف.',
+  'Driver name must be at least 2 characters.':
+    'اسم السائق قصير — الحد الأدنى ٢ حرف.',
+  'Driver name must be at most 120 characters.':
+    'اسم السائق طويل — الحد الأقصى ١٢٠ حرف.',
+  'Must be a valid identifier.': 'المعرّف غير صحيح.',
+  'Idempotency key is malformed.':
+    'بيانات الطلب غير سليمة — حدّث الصفحة وحاول تاني.',
+  'Notes are too long.': 'الملاحظات طويلة أوي.',
+  'Phone is too long.': 'رقم التليفون طويل أوي.',
+  'Phone contains invalid characters.': 'رقم التليفون فيه حروف غير مسموحة.',
+  'Invalid registration data.': 'بيانات التسجيل غير سليمة.',
+  'Invalid transition request.': 'طلب النقلة غير سليم.',
+  'Visit has an unknown status.': 'حالة الزيارة غير معروفة — كلّم الدعم.',
+  'Visit not found.': 'الزيارة دي مش موجودة.',
   'A reason of at least 3 characters is required for this action.':
     'لازم تكتب سبب (٣ حروف على الأقل).',
   'A reason is mandatory for this action.': 'السبب إجباري للفعل ده.',
   'A reason is mandatory for hold/reject/cancel actions.':
     'لازم تكتب سبب لتعليق أو رفض أو إلغاء الزيارة.',
   'Reason is too long (max 500 characters).': 'السبب طويل أوي (الحد ٥٠٠ حرف).',
-  'Visit not found.': 'الزيارة دي مش موجودة.',
-  'Transition is not valid for the current status':
-    'النقلة دي مش متاحة للحالة الحالية — حدّث الصفحة وحاول تاني.',
   'Registration failed.': 'تعذّر حفظ البيانات، حاول مرة أخرى.',
   'Transition failed.': 'تعذّر تنفيذ العملية، حاول مرة أخرى.',
   'Failed to update user.': 'تعذّر حفظ البيانات، حاول مرة أخرى.'
@@ -61,6 +81,14 @@ export function arMessage(err: unknown): string {
   }
   if (raw.includes('already has an active visit')) {
     return 'العربية دي عندها زيارة شغّالة بالفعل.';
+  }
+  // Dynamic template messages from the transition engine (visits.ts):
+  // 'Transition X → Y is not allowed.' / 'Zone Z is not configured.'
+  if (raw.includes('is not allowed.')) {
+    return 'النقلة دي مش متاحة للحالة الحالية — حدّث الصفحة وحاول تاني.';
+  }
+  if (raw.includes('is not configured.')) {
+    return 'منطقة العمل مش مفعّلة — كلّم الدعم.';
   }
   return GENERIC_ERROR_AR;
 }
