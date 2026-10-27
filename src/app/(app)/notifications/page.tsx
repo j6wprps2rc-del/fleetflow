@@ -1,6 +1,7 @@
 import { requireUser } from '@/lib/auth';
 import { pool } from '@/db';
 import { acknowledgeAction } from './actions';
+import { AR } from '@/lib/i18n';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +19,12 @@ const SEVERITY_COLOR: Record<string, string> = {
   info: 'border-ff-cyan/40 bg-ff-cyan/10 text-ff-cyan',
   warning: 'border-ff-warning/40 bg-ff-warning/10 text-ff-warning',
   critical: 'border-ff-danger/40 bg-ff-danger/10 text-ff-danger'
+};
+
+const SEVERITY_AR: Record<string, string> = {
+  info: 'معلومة',
+  warning: 'تنبيه',
+  critical: 'حرج'
 };
 
 export default async function NotificationsPage() {
@@ -38,16 +45,16 @@ export default async function NotificationsPage() {
   return (
     <div className="flex flex-col gap-6">
       <header>
-        <h1 className="text-xl font-bold tracking-tight text-white">Notifications</h1>
+        <h1 className="text-xl font-bold tracking-tight text-white">{AR.notifications}</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Alerts for your role ({unread.length} unread). You see only notifications targeted at your role.
+          تنبيهات لدورك ({unread.length} جديد). بتشوف بس الإشعارات المخصصة لدورك.
         </p>
       </header>
 
       <section className="flex flex-col gap-3">
         {notifications.length === 0 ? (
           <p className="rounded-2xl border border-ff-border bg-ff-surface/60 p-8 text-center text-sm text-slate-500">
-            No notifications yet. They appear as visits move through the workflow.
+            لسه مفيش إشعارات — بتظهر كل ما زيارة تتحرك في مراحل العمل.
           </p>
         ) : (
           notifications.map((n) => (
@@ -61,21 +68,20 @@ export default async function NotificationsPage() {
             >
               <div className="min-w-0">
                 <p className="flex items-center gap-2 text-sm font-semibold text-white">
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${SEVERITY_COLOR[n.severity] ?? ''}`}>
-                    {n.severity}
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wider ${SEVERITY_COLOR[n.severity] ?? ''}`}>
+                    {SEVERITY_AR[n.severity] ?? n.severity}
                   </span>
                   {n.title}
                 </p>
                 <p className="mt-1 text-sm text-slate-400">{n.body}</p>
                 <p className="mt-1 text-xs text-slate-500">
-                  {new Date(n.created_at).toLocaleString()}
-                  {n.visit_id ? ' · related visit' : ''}
+                  {new Date(n.created_at).toLocaleString('ar-EG')}
                 </p>
               </div>
               <div className="flex items-center gap-3">
                 {n.visit_id ? (
                   <a href={`/visits/${n.visit_id}`} className="text-xs font-medium text-ff-cyan hover:underline">
-                    Open visit →
+                    افتح الزيارة ←
                   </a>
                 ) : null}
                 {!n.acknowledged_at ? (
@@ -85,11 +91,11 @@ export default async function NotificationsPage() {
                       type="submit"
                       className="rounded-lg border border-ff-border px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-ff-success/50 hover:text-ff-success"
                     >
-                      Acknowledge
+                      تم الاطّلاع
                     </button>
                   </form>
                 ) : (
-                  <span className="text-xs text-slate-500">Acknowledged</span>
+                  <span className="text-xs text-slate-500">تم الاطّلاع ✓</span>
                 )}
               </div>
             </article>
