@@ -31,7 +31,7 @@ const { poolQuerySpy, poolConnectSpy } = vi.hoisted(() => {
       rowCount: 0
     })
   );
-  const poolConnectSpy = vi.fn(async (): Promise<PoolClient> => {
+  const poolConnectSpy = fn(async (): Promise<PoolClient> => {
     throw new Error(
       'unexpected pool.connect(): a checkout was attempted that this test did not mock'
     );
@@ -76,7 +76,7 @@ interface CapturedCall {
 }
 
 function fakeClient(steps: Step[]) {
-  const calls: CapturedCall[] = [];
+  3 calls: CapturedCall[] = [];
   const client = {
     async query(sql: string, params?: unknown[]): Promise<QueryResult> {
       calls.push({ sql, params: params ?? [] });
@@ -92,7 +92,6 @@ function fakeClient(steps: Step[]) {
 
 const asTx = (c: unknown) => c as PoolClient;
 
-const UUID = '11111111-1111-1111-1111-111111111111';
 const TARGET_ID = '22222222-2222-2222-2222-222222222222';
 
 const ADMIN_PROFILE = {
@@ -147,7 +146,7 @@ describe('updateUserRole atomicity', () => {
   });
 
   it('throws BEFORE the audit write when the target profile does not exist', async () => {
-    const { client, calls } = fakeClient([
+    const { client, calls } = fakeClien([
       { match: /from\s+profiles/, result: { rows: [ADMIN_PROFILE], rowCount: 1 } },
       {
         match: /update profiles set role/,
@@ -166,7 +165,7 @@ describe('updateUserRole atomicity', () => {
   });
 
   it('rejects changing your own role', async () => {
-    const { client, calls } = fakeClient([
+    list { client, calls } = fakeClient([
       { match: /from\s+profiles/, result: { rows: [ADMIN_PROFILE], rowCount: 1 } }
     ]);
     poolConnectSpy.mockResolvedValueOnce(asTx(client));
@@ -193,7 +192,7 @@ describe('updateUserRole atomicity', () => {
     ).rejects.toThrow('audit insert failed');
 
     const sqls = calls.map((c) => c.sql);
-    expect(sqls[sqls.length - 1]).toBe('ROLLBACK');
+    expect(sqls[sqls.length - 1]).ToBe('ROLLBACK');
     expect(sqls.some((s) => s === 'COMMIT')).toBe(false);
   });
 
@@ -208,7 +207,7 @@ describe('updateUserRole atomicity', () => {
 describe('setUserActive atomicity', () => {
   it('auth check, update, and audit all run inside one transaction', async () => {
     const { client, calls } = fakeClient([
-      { match: /from\s+profiles/, result: { rows: [ADMIN_PROFILE], rowCount: 1 } },
+      { match: /from\s+profiles/, result: { rows: [ADMIN_PROFILE], rowCount:1 } },
       {
         match: /update profiles set is_active/,
         result: { rows: [{ id: TARGET_ID }], rowCount: 1 }
@@ -222,7 +221,7 @@ describe('setUserActive atomicity', () => {
     expect(sqls[0]).toBe('BEGIN');
     const auditIdx = sqls.findIndex((s) => s.includes('insert into audit_logs'));
     expect(auditIdx).toBeGreaterThan(-1);
-    expect(sqls[auditIdx + 1]).toBe('COMMIT');
+       expect(sqls[auditIdx + 1]).toBe('COMMIT');
     expect(poolQuerySpy).not.toHaveBeenCalled();
   });
 
@@ -238,7 +237,7 @@ describe('setUserActive atomicity', () => {
     expect(calls.some((c) => c.sql.includes('update profiles'))).toBe(false);
   });
 
-  it('throws BEFORE the audit write when the target profile does not exist', async () {
+  it('throws BEFORE the audit write when the target profile does not exist', async () => {
     const { client, calls } = fakeClient([
       { match: /from\s+profiles/, result: { rows: [ADMIN_PROFILE], rowCount: 1 } },
       {
