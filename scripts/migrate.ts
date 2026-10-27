@@ -3,6 +3,12 @@
  * Usage: npm run db:migrate
  * Connection: prefers DATABASE_URL_MIGRATIONS (direct, port 5432), falls back to DATABASE_URL.
  * Each migration runs inside a transaction and is tracked in the __migrations table.
+ *
+ * SAFETY RULE (manual-workflow-only product decision): migrations listed in
+ * BLOCKED_MIGRATIONS are NEVER applied by this runner. The device-ingestion
+ * migration 0004 belongs to a removed design; its file is kept in-repo for
+ * review history only. Blocked files are filtered out BEFORE the apply loop
+ * and announced loudly — never silently skipped.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -23,6 +29,17 @@ if (url.includes(':6543')) {
     'WARNING: this URL looks like the transaction pooler (port 6543). Prefer the direct connection (port 5432) for migrations.'
   );
 }
+
+/**
+ * Migrations that must never be applied by this runner. Add a file here only
+ * with an explicit, documented product decision (see README).
+ */
+const BLOCKED_MIGRATIONS: ReadonlySet<string> = new Set([
+  // Removed device-tracking design (BLE gateways, tag bindings, detection
+  // columns). FleetFlow is manual-workflow-only; the file stays in the repo
+  // for review history and must not touch any database.
+  '0004_device_ingestion.sql'
+]);
 
 const isLocal = /localhost|127\.0\.0\.1/.test(url);
 const migrationsDir = join(process.cwd(), 'drizzle');
@@ -47,12 +64,19 @@ async function main(): Promise<void> {
     )
   );
 
-  const files = readdirSync(migrationsDir)
+  const allSqlFiles = readdirSync(migrationsDir)
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
+  const blockedPresent = allSqlFiles.filter((f) => BLOCKED_MIGRATIONS.has(f));
+  for (const blocked of blockedPresent) {
+    console.log(`! blocked  ${blocked} (excluded by BLOCKED_MIGRATIONS — never applied; see README)`);
+  }
+
+  const files = allSqlFiles.filter((f) => !BLOCKED_MIGRATIONS.has(f));
+
   if (files.length === 0) {
-    console.log('No migration files found in drizzle/.');
+    console.log('No applicable migration files found in drizzle/.');
   }
 
   for (const file of files) {
