@@ -3,17 +3,30 @@
 Industrial vehicle-entry, zone-tracking and gate-management platform built with
 **Next.js 14 (App Router) + TypeScript strict + Tailwind CSS** and **Supabase PostgreSQL**.
 
-> **Status — Checkpoints 1–5 implemented on `fix/transaction-pool-starvation`** (not yet
-> merged to `main`; review pending). Implemented: Supabase Auth + middleware route
-> protection, server-side RBAC, dashboard, user management, audit trail viewer, visit
-> registration (duplicate- and idempotency-safe), transactional workflow transitions with
-> row locks + post-lock state re-validation, append-only gate movements, role-targeted
-> notifications with trigger-enforced acknowledgement, visits list/search/pagination,
-> visit details + timeline, **BLE gateway registry + ingestion API** (`POST /api/ingest`),
-> **clearly-labeled simulator** (SIMULATED method, SUPER_ADMIN only), and **reports &
-> analytics**. **Honest scope:** no real BLE hardware is connected; the simulator exists
-> for development/demo and every simulated row is labeled SIMULATED. No GPS tracking is
-> claimed anywhere.
+> **Operating model — MANUAL WORKFLOW ONLY.** Authorized employees record every
+> vehicle arrival, every movement between company zones, and every workflow
+> transition by hand. FleetFlow records **who** performed each action and **when**.
+> There is **no device tracking, no BLE receivers, no vehicle tags, no gateway keys,
+> no automatic detections, and no simulator**. Nothing in this system depends on
+> tracking hardware, and no GPS or other hardware-based tracking is used.
+
+## How the manual workflow operates
+
+1. A **Parking Operator** (or Super Admin) registers a vehicle's arrival — the visit
+   is created with a unique visit code, and duplicate active visits per vehicle are
+   blocked.
+2. The visit moves through zones as authorized employees confirm each stage:
+   Parking → Security → Laboratory → Completed.
+3. Each stage transition is performed by the role that owns that zone
+   (Security Operator for security, Lab Operator for the laboratory), validated
+   server-side under a row lock so concurrent or repeated submissions cannot create
+   invalid states.
+4. Every transition atomically records: the movement between zones
+   (`gate_movements`, append-only), the new status, notifications for the next
+   responsible role, and an audit entry — all in one transaction.
+5. **Super Admin** can additionally hold / reject / cancel a visit with a mandatory
+>  reason.
+6. Reports and dashboards summarize the actually recorded manual data only.
 
 ## Tech stack
 
@@ -31,20 +44,19 @@ Industrial vehicle-entry, zone-tracking and gate-management platform built with
 
 - **Server-side authorization everywhere** — `requireUser` (pages) and `assertRole`
   (server actions) verify the session server-side and read the role from `profiles`.
-  UI hiding is cosmetic. Every gateway mutation also runs `assertRole(['SUPER_ADMIN'])`.
+  UI hiding is cosmetic.
 - **The app server connects as the privileged DB role** (schema owner, bypasses RLS).
   Authorization decisions are made in the app layer before the privileged query runs;
   RLS is the enforced second boundary for anon-key client access.
 - **Transactions** — `SELECT … FOR UPDATE` + post-lock re-validation; gate movements,
   status update, audit entries, and notifications are written in one transaction.
-  **Mandatory transactional audit:** a failed audit insert rolls back the whole operation;
-  standalone audit failures remain logged-and-non-fatal by design.
+  **Mandatory transactional audit:** a failed audit insert rolls back the whole
+  operation; standalone audit failures remain logged-and-non-fatal by design.
 - **Transaction-client discipline** — all queries inside `withTransaction` (including
-  `assertRole` and `audit`) run on the checked-out client; nothing inside a transaction
-  ever goes through the global pool (Vercel pool max 1 would otherwise deadlock).
-- **Gateway keys** — SHA-256 hashed at rest, constant-time comparison, plaintext shown
-  exactly once at creation/rotation, never stored client-side. Ingestion cannot advance
-  the workflow; it only records device evidence.
+  `assertRole` and `audit`) run on the checked-out client; nothing inside a
+  transaction ever goes through the global pool (Vercel pool max 1 would deadlock).
+- **Identity** — audit records and movement confirmations always carry the
+  session-derived profile id, never a client-supplied user id.
 - **Idempotency/duplicates** — DB partial unique indexes are the source of truth;
   23505 races resolve to typed results.
 
@@ -65,16 +77,22 @@ Never commit real credentials. `SUPABASE_SERVICE_ROLE_KEY` is NOT used by this a
 
 ```bash
 npm install
-npm run db:migrate   # applies drizzle/*.sql in order (0001 → 0004) via DIRECT connection
+npm run db:migrate   # applies drizzle/*.sql in order (0001 → 0003) via DIRECT connection
 npm run db:verify    # read-only connection check
 ```
 
-**Migration status (honest):** as of this commit, **0001 and 0002 are applied** to your
-Supabase project (verified earlier via db:verify). **0003 and 0004 are NOT applied yet**
-(0004 was authored in this session: gateways table, BLE tag binding, last-detection
-columns). Both are additive-only and rerunnable. Apply with `npm run db:migrate` after
-your review and explicit approval — nothing has been run against your database by the
-agent.
+**Migration status (honest):** **0001 and 0002 are applied** to the Supabase project
+(verified earlier via db:verify). **0003 is NOT applied yet** (visit workflow +
+notifications). It is additive-only and fully rerunnable.
+
+**About `drizzle/0004_device_ingestion.sql`:** this file is a leftover from a
+**removed** device-tracking design and is intentionally **kept in the repository
+** but **not applied and not referenced by any application code**. Reason: the
+agent environment has no connected database tool to verify that the file was
+never applied to any environment, so per the database-safety rules it is preserved
+until you confirm its status (check `select filename from __migrations` — if
+`0004_device_ingestion.sql` is absent, it is safe to delete the file; if present,
+leave the schema objects in place — they are inert — and do not run any drops).
 
 ### 3 · First administrator
 
@@ -92,32 +110,25 @@ npm run test
 npm run build
 ```
 
-## BLE ingestion — how it works
+### Testing scope (honest)
 
-1. **SUPER_ADMIN** registers a gateway in **/simulator** (choose label + zone). The API
-   key is displayed once — save it immediately.
-2. Physical receivers POST to `POST /api/ingest` with header `x-api-key: <gateway key>`:
-   ```json
-   { "bleTagId": "TAG-001" }
-   ```
-   Responses: `200` with a typed result, `401` for a bad/inactive key (uniform),
-   `400` for malformed input.
-3. Vehicles are bound to tags via `vehicles.ble_tag_id` (set in SQL for now; a UI for tag
-   binding is a small follow-up).
-4. A detection appends `gate_movements` (method `DEVICE_DETECTION`) **only on first
-   detection or zone change**; repeated same-zone pings only refresh
-   `last_detected_at`. The workflow status is NEVER changed by a device — employees
-   confirm stages manually.
-5. The simulator (bottom of /simulator) sends detections through the exact same
-   pipeline with `method = 'SIMULATED'` — labeled everywhere, never mixed with device data.
+`npm run test` runs unit + behavioral + static characterization tests (no database
+needed): plate normalization, RBAC map (including behavioral absence checks for
+removed device permissions), workflow state machine, SQL security properties of
+migrations 0002/0003, visit schemas, transition authorization matrix, gate-movement
+mapping, transaction-client propagation, mandatory-audit rollback, acknowledge
+binding regression.
+
+**Not covered by automated tests:** runtime RLS/trigger behavior against a live
+database (needs an isolated integration DB — documented gap).
 
 ## Deployment (Vercel)
 
-Same env vars for Production/Preview/Development; middleware needs them at build time.
-Run `npm run db:migrate` (after approval) before the first deploy that includes 0003/0004.
-A passing build is code readiness only — production readiness additionally needs:
-migrations applied, admin bootstrap, live RLS verification (queries in README §Verify),
-and user acceptance testing of the full workflow + a real gateway key round-trip.
+Same env vars for Production/Preview/Development; middleware needs them at build
+time. Run `npm run db:migrate` (after approval) before the first deploy that includes
+0003. A passing build is code readiness only — production readiness additionally
+needs: migrations applied, admin bootstrap, live RLS verification, and user acceptance
+testing of the full manual workflow.
 
 ## Roadmap
 
@@ -127,7 +138,6 @@ and user acceptance testing of the full workflow + a real gateway key round-trip
 - [x] Checkpoint 3 — visit registration, transitions, gate movements, notifications,
       audit viewer, visits UI
 - [x] Pool/transaction hardening — tx-client propagation, mandatory transactional audit
-- [x] Checkpoint 4 — gateway registry, BLE ingestion API, clearly-labeled simulator
-- [x] Checkpoint 5 — reports & analytics page
-- [ ] Your review → apply 0003/0004 → merge to `main` (explicit approval required)
-- [ ] Physical BLE hardware integration (external — needs real receivers on site)
+- [x] Checkpoint 4/5 — reports & analytics over manual data
+- [x] Manual-workflow-only conversion — device ingestion and simulator removed
+- [ ] Your review → apply 0003 → merge to `main` (explicit approval required)
