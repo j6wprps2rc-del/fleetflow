@@ -71,6 +71,11 @@ export default async function ReportsPage() {
     .filter((s) => !['COMPLETED', 'REJECTED', 'CANCELLED'].includes(s.status))
     .reduce((sum, s) => sum + s.c, 0);
 
+  const avgMovementsPerZone =
+    zoneActivity.length > 0
+      ? Math.round(zoneActivity.reduce((a, z) => a + z.movements, 0) / zoneActivity.length)
+      : 0;
+
   return (
     <div className="flex flex-col gap-6">
       <header>
@@ -96,11 +101,9 @@ export default async function ReportsPage() {
           </p>
         </div>
         <div className="rounded-2xl border border-ff-border bg-ff-surface/60 p-5 shadow-card">
-          <p className="text-xs uppercase tracking-wider text-slate-500">Avg dwell (last 7d)</p>
-          <p className="mt-2 text-3xl font-bold text-white">
-            {zoneActivity.length > 0 ? Math.round(zoneActivity.reduce((a, z) => a + z.movements, 0) / zoneActivity.length) : 0}
-          </p>
-          <p className="mt-1 text-[10px] text-slate-500">Movements per zone — manually confirmed.</p>
+          <p className="text-xs uppercase tracking-wider text-slate-500">Avg movements per zone (7d)</p>
+          <p className="mt-2 text-3xl font-bold text-white">{avgMovementsPerZone}</p>
+          <p className="mt-1 text-[10px] text-slate-500">Manually confirmed movements.</p>
         </div>
       </section>
 
@@ -151,7 +154,7 @@ export default async function ReportsPage() {
                 <tr className="border-b border-ff-border text-xs uppercase tracking-wider text-slate-500">
                   <th className="px-3 py-2">Visit</th>
                   <th className="px-3 py-2">Status</th>
-th className="px-3 py-2">Registered</th>
+                  <th className="px-3 py-2">Registered</th>
                 </tr>
               </thead>
               <tbody>
