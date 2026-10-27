@@ -8,21 +8,10 @@ import {
   type WorkflowStatus
 } from '@/lib/workflow';
 import { authorizedRolesForTransition } from '@/lib/visit-mapping';
+import { AR } from '@/lib/i18n';
 import { StageActions, AdminActions } from './stage-actions';
 
 export const dynamic = 'force-dynamic';
-
-const STATUS_LABEL: Record<string, string> = {
-  REGISTERED: 'Registered',
-  WAITING_FOR_SECURITY: 'Awaiting Security',
-  AT_SECURITY: 'At Security',
-  WAITING_FOR_LAB: 'Awaiting Laboratory',
-  AT_LAB: 'At Laboratory',
-  COMPLETED: 'Completed',
-  ON_HOLD: 'On Hold',
-  REJECTED: 'Rejected',
-  CANCELLED: 'Cancelled'
-};
 
 const STATUS_COLOR: Record<string, string> = {
   REGISTERED: 'border-ff-cyan/40 bg-ff-cyan/10 text-ff-cyan',
@@ -110,20 +99,20 @@ export default async function VisitDetailPage({
     <div className="flex flex-col gap-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="font-mono text-xs text-slate-500">{visit.visit_code}</p>
+          <p className="font-mono text-xs text-slate-500" dir="ltr">{visit.visit_code}</p>
           <h1 className="mt-1 flex items-center gap-3 text-xl font-bold tracking-tight text-white">
-            {visit.plate_display}
+            <span dir="ltr">{visit.plate_display}</span>
             <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_COLOR[status] ?? ''}`}>
-              {STATUS_LABEL[status]}
+              {AR.statusLabels[status]}
             </span>
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            {visit.company} · registered {new Date(visit.created_at).toLocaleString()}
-            {visit.registered_by_name ? ` by ${visit.registered_by_name}` : ''}
+            {visit.company} · تسجيلها {new Date(visit.created_at).toLocaleString('ar-EG')}
+            {visit.registered_by_name ? ` بواسطة ${visit.registered_by_name}` : ''}
           </p>
         </div>
         <Link href="/visits" className="text-xs font-medium text-ff-cyan hover:underline">
-          ← All visits
+          → كل الزيارات
         </Link>
       </header>
 
@@ -140,40 +129,40 @@ export default async function VisitDetailPage({
 
       <section className="grid gap-4 lg:grid-cols-3">
         <div className="rounded-2xl border border-ff-border bg-ff-surface/60 p-5 shadow-card lg:col-span-1">
-          <h2 className="text-sm font-semibold text-white">Details</h2>
+          <h2 className="text-sm font-semibold text-white">التفاصيل</h2>
           <dl className="mt-3 flex flex-col gap-2 text-sm">
             <div className="flex justify-between gap-2">
-              <dt className="text-slate-500">Company</dt>
-              <dd className="text-right text-slate-300">{visit.company}</dd>
+              <dt className="text-slate-500">الشركة</dt>
+              <dd className="text-left text-slate-300">{visit.company}</dd>
             </div>
             <div className="flex justify-between gap-2">
-              <dt className="text-slate-500">Status</dt>
-              <dd className="text-right text-slate-300">{STATUS_LABEL[status]}</dd>
+              <dt className="text-slate-500">الحالة</dt>
+              <dd className="text-left text-slate-300">{AR.statusLabels[status]}</dd>
             </div>
             <div className="flex justify-between gap-2">
-              <dt className="text-slate-500">Registered</dt>
-              <dd className="text-right text-slate-300">{new Date(visit.created_at).toLocaleString()}</dd>
+              <dt className="text-slate-500">تاريخ التسجيل</dt>
+              <dd className="text-left text-slate-300">{new Date(visit.created_at).toLocaleString('ar-EG')}</dd>
             </div>
             {visit.completed_at ? (
               <div className="flex justify-between gap-2">
-                <dt className="text-slate-500">Completed</dt>
-                <dd className="text-right text-ff-success">{new Date(visit.completed_at).toLocaleString()}</dd>
+                <dt className="text-slate-500">اكتملت</dt>
+                <dd className="text-left text-ff-success">{new Date(visit.completed_at).toLocaleString('ar-EG')}</dd>
               </div>
             ) : null}
           </dl>
           {visit.notes ? (
             <div className="mt-4 border-t border-ff-border pt-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Notes</p>
+              <p className="text-xs font-semibold tracking-wider text-slate-500">ملاحظات</p>
               <p className="mt-1 whitespace-pre-wrap text-sm text-slate-300">{visit.notes}</p>
             </div>
           ) : null}
         </div>
 
         <div className="rounded-2xl border border-ff-border bg-ff-surface/60 p-5 shadow-card lg:col-span-2">
-          <h2 className="text-sm font-semibold text-white">Movement timeline</h2>
+          <h2 className="text-sm font-semibold text-white">سجل الحركة</h2>
           {timeline.length === 0 ? (
             <p className="mt-4 text-sm text-slate-500">
-              No movements recorded yet. The first entry appears when the visit is dispatched.
+              لسه مفيش حركات متسجّلة — أول حركة بتظهر لما الزيارة تتdispatch للأمن.
             </p>
           ) : (
             <ol className="mt-4 flex flex-col gap-4">
@@ -187,14 +176,14 @@ export default async function VisitDetailPage({
                   />
                   <div>
                     <p className="text-sm text-white">
-                      {m.direction === 'ENTRY' ? 'Entered' : 'Exited'} {m.zone.charAt(0) + m.zone.slice(1).toLowerCase()}
-                      <span className="ml-2 rounded border border-ff-border px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-slate-500">
-                        manual
+                      {m.direction === 'ENTRY' ? 'دخول' : 'خروج'} {AR.zoneLabels[m.zone] ?? m.zone}
+                      <span className="ml-2 rounded border border-ff-border px-1.5 py-0.5 text-[10px] tracking-wider text-slate-500">
+                        تسجيل يدوي
                       </span>
                     </p>
                     <p className="text-xs text-slate-500">
-                      {new Date(m.occurred_at).toLocaleString()}
-                      {m.confirmed_by_name ? ` · by ${m.confirmed_by_name}` : ''}
+                      {new Date(m.occurred_at).toLocaleString('ar-EG')}
+                      {m.confirmed_by_name ? ` · بواسطة ${m.confirmed_by_name}` : ''}
                       {m.reason ? ` · ${m.reason}` : ''}
                     </p>
                   </div>
