@@ -71,7 +71,7 @@ export function NewVisitForm({ companies }: { companies: { id: string; name: str
 
   return (
     <form
-n      onSubmit={onSubmit}
+      onSubmit={onSubmit}
       className="flex flex-col gap-4 rounded-2xl border border-ff-border bg-ff-surface/60 p-6 shadow-card"
     >
       <label className="flex flex-col gap-1.5">
@@ -102,7 +102,7 @@ n      onSubmit={onSubmit}
 
       {!isNewCompany && companies.length > 8 ? (
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-slate-500">فلترة الشركات</span>
+                   <span className="text-xs font-medium text-slate-500">فلترة الشركات</span>
           <input
             value={companySearch}
             onChange={(e) => setCompanySearch(e.target.value)}
