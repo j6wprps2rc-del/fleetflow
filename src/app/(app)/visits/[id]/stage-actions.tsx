@@ -4,13 +4,14 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { transitionVisitAction } from '../actions';
 import type { WorkflowStatus } from '@/lib/workflow';
+import { AR } from '@/lib/i18n';
 
 const ACTION_LABEL: Partial<Record<WorkflowStatus, string>> = {
-  WAITING_FOR_SECURITY: 'Dispatch to Security',
-  AT_SECURITY: 'Confirm at Security',
-  WAITING_FOR_LAB: 'Pass & send to Laboratory',
-  AT_LAB: 'Confirm at Laboratory',
-  COMPLETED: 'Complete visit'
+  WAITING_FOR_SECURITY: 'إرسال للأمن',
+  AT_SECURITY: 'تأكيد دخول الأمن',
+  WAITING_FOR_LAB: 'إرسال للمعمل',
+  AT_LAB: 'تأكيد دخول المعمل',
+  COMPLETED: 'إنهاء الزيارة'
 };
 
 export function StageActions({
@@ -47,7 +48,7 @@ export function StageActions({
             onClick={() => run(target)}
             className="rounded-lg bg-ff-petrol px-4 py-2 text-sm font-semibold text-white transition hover:bg-ff-petrol/80 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {pending ? 'Working…' : ACTION_LABEL[target] ?? target}
+            {pending ? 'جارٍ التنفيذ…' : ACTION_LABEL[target] ?? AR.statusLabels[target] ?? target}
           </button>
         ))}
       </div>
@@ -86,20 +87,20 @@ export function AdminActions({
   }
 
   const ADMIN_LABEL: Partial<Record<WorkflowStatus, string>> = {
-    ON_HOLD: 'Put on hold',
-    REJECTED: 'Reject visit',
-    CANCELLED: 'Cancel visit'
+    ON_HOLD: 'تعليق الزيارة',
+    REJECTED: 'رفض الزيارة',
+    CANCELLED: 'إلغاء الزيارة'
   };
 
   return (
     <section className="flex flex-col gap-2 rounded-2xl border border-ff-warning/30 bg-ff-warning/5 p-4">
-      <p className="text-xs font-semibold uppercase tracking-wider text-ff-warning">
-        Administrative actions (super admin — reason recorded permanently)
+      <p className="text-xs font-semibold tracking-wider text-ff-warning">
+        إجراءات إدارية (أدمن رئيسي — السبب بيتسجّل بشكل دائم)
       </p>
       <input
         value={reason}
         onChange={(e) => setReason(e.target.value)}
-        placeholder="Reason (required, min 3 characters)…"
+        placeholder="السبب (إجباري، ٣ حروف على الأقل)…"
         className="rounded-lg border border-ff-border bg-ff-bg px-3 py-2 text-sm text-white outline-none focus:border-ff-warning"
       />
       <div className="flex flex-wrap gap-3">
@@ -111,7 +112,7 @@ export function AdminActions({
             onClick={() => run(target)}
             className="rounded-lg border border-ff-warning/50 px-4 py-2 text-sm font-medium text-ff-warning transition hover:bg-ff-warning/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {pending ? 'Working…' : ADMIN_LABEL[target] ?? target}
+            {pending ? 'جارٍ التنفيذ…' : ADMIN_LABEL[target] ?? AR.statusLabels[target] ?? target}
           </button>
         ))}
       </div>
