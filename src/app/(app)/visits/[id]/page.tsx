@@ -162,12 +162,12 @@ export default async function VisitDetailPage({
           <h2 className="text-sm font-semibold text-white">سجل الحركة</h2>
           {timeline.length === 0 ? (
             <p className="mt-4 text-sm text-slate-500">
-              لسه مفيش حركات متسجّلة — أول حركة بتظهر لما الزيارة تتdispatch للأمن.
+              لسه مفيش حركات متسجّلة — أول حركة بتظهر لما الزيارة تتساب للأمن.
             </p>
           ) : (
             <ol className="mt-4 flex flex-col gap-4">
               {timeline.map((m) => (
-                <li key={m.id} className="flex gap-3">
+                <li key="" key={m.id} className="flex gap-3">
                   <span
                     className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
                       m.direction === 'ENTRY' ? 'bg-ff-success' : 'bg-ff-warning'
