@@ -40,7 +40,7 @@ export function AppShell({
   return (
     <div className="flex min-h-screen">
       <aside
-        className={`flex flex-col border-r border-ff-border bg-ff-surface transition-all duration-200 ${
+        className={`flex flex-col border-l border-ff-border bg-ff-surface transition-all duration-200 ${
           collapsed ? 'w-16' : 'w-60'
         }`}
       >
@@ -48,10 +48,10 @@ export function AppShell({
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-ff-cyan/30 bg-ff-cyan/10 text-xs font-bold text-ff-cyan">
             FF
           </span>
-          {!collapsed ? <span className="text-sm font-bold tracking-widest text-white">FLEETFLOW</span> : null}
+          {!collapsed ? <span className="text-sm font-bold tracking-widest text-white">فليت فلو</span> : null}
         </div>
 
-        <nav className="flex flex-1 flex-col gap-1 p-3" aria-label="Main navigation">
+        <nav className="flex flex-1 flex-col gap-1 p-3" aria-label="التنقل الرئيسي">
           {items.map((item) => {
             const Icon = ICONS[item.icon];
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -71,8 +71,8 @@ export function AppShell({
                 {!collapsed ? <span className="truncate">{item.label}</span> : null}
                 {item.icon === 'notifications' && unreadNotifications > 0 ? (
                   <span
-                    aria-label={`${unreadNotifications} unread notifications`}
-                    className="absolute right-2 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-ff-danger px-1 text-[10px] font-bold text-white"
+                    aria-label={`${unreadNotifications} إشعارات جديدة`}
+                    className="absolute left-2 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-ff-danger px-1 text-[10px] font-bold text-white"
                   >
                     {unreadNotifications > 99 ? '99+' : unreadNotifications}
                   </span>
@@ -88,14 +88,14 @@ export function AppShell({
           <button
             type="button"
             onClick={() => setCollapsed(!collapsed)}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={collapsed ? 'توسيع القائمة' : 'تضييق القائمة'}
             className="rounded-lg p-2 text-slate-400 transition hover:bg-ff-bg hover:text-white"
           >
-            <PanelLeft size={18} />
+            <PanelLeft size={18} className="rtl:rotate-180" />
           </button>
 
           <div className="flex items-center gap-3">
-            <div className="hidden text-right sm:block">
+            <div className="hidden text-left sm:block">
               <p className="text-sm font-medium leading-tight text-white">{name}</p>
               <p className="text-xs leading-tight text-slate-500">{roleLabel}</p>
             </div>
@@ -105,7 +105,7 @@ export function AppShell({
                 className="flex items-center gap-2 rounded-lg border border-ff-border px-3 py-2 text-xs font-medium text-slate-400 transition hover:border-ff-danger/50 hover:text-ff-danger"
               >
                 <LogOut size={14} />
-                Sign out
+                تسجيل الخروج
               </button>
             </form>
           </div>
