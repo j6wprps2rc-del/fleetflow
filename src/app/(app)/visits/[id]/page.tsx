@@ -33,7 +33,7 @@ interface VisitDetail {
   company: string;
   notes: string | null;
   created_at: string;
-  committed_at_placeholder: never;
+  completed_at: string | null;
   registered_by_name: string | null;
 }
 
@@ -162,7 +162,7 @@ export default async function VisitDetailPage({
           <h2 className="text-sm font-semibold text-white">سجل الحركة</h2>
           {timeline.length === 0 ? (
             <p className="mt-4 text-sm text-slate-500">
-              لسه مفيش حركات متسجّلة — أول حركة بتظهر لما الزيارة تتساب للأمن.
+              لسه مفيش حركات متسجّلة — أول حركة بتظهر لما الزيارة تتبعت للأمن.
             </p>
           ) : (
             <ol className="mt-4 flex flex-col gap-4">
