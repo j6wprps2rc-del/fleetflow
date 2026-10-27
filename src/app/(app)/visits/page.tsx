@@ -2,20 +2,9 @@ import Link from 'next/link';
 import { requireUser } from '@/lib/auth';
 import { pool } from '@/db';
 import { isWorkflowStatus, TRANSITIONS, type WorkflowStatus } from '@/lib/workflow';
+import { AR } from '@/lib/i18n';
 
 export const dynamic = 'force-dynamic';
-
-const STATUS_LABEL: Record<string, string> = {
-  REGISTERED: 'Registered',
-  WAITING_FOR_SECURITY: 'Awaiting Security',
-  AT_SECURITY: 'At Security',
-  WAITING_FOR_LAB: 'Awaiting Laboratory',
-  AT_LAB: 'At Laboratory',
-  COMPLETED: 'Completed',
-  ON_HOLD: 'On Hold',
-  REJECTED: 'Rejected',
-  CANCELLED: 'Cancelled'
-};
 
 const STATUS_COLOR: Record<string, string> = {
   REGISTERED: 'border-ff-cyan/40 bg-ff-cyan/10 text-ff-cyan',
@@ -54,7 +43,7 @@ export default async function VisitsPage({
   const offset = (page - 1) * PAGE_SIZE;
 
   const conditions: string[] = [];
-  const params: unknown[] = []
+  const params: unknown[] = [];
   if (q) {
     params.push(`%${q.toUpperCase().replace(/[\s\-_.]/g, '')}%`);
     conditions.push(`ve.plate_normalized like $${params.length}`);
@@ -101,16 +90,16 @@ export default async function VisitsPage({
     <div className="flex flex-col gap-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-white">Vehicle Visits</h1>
+          <h1 className="text-xl font-bold tracking-tight text-white">زيارات العربيات</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Register, track and manage every vehicle visit through the workflow.
+            تسجيل ومتابعة كل زيارة عبر مراحل العمل: الجراج ← الأمن ← المعمل.
           </p>
         </div>
         <Link
           href="/visits/new"
           className="rounded-lg bg-ff-petrol px-4 py-2 text-sm font-semibold text-white transition hover:bg-ff-petrol/80"
         >
-          + Register visit
+          + {AR.registerVisit}
         </Link>
       </header>
 
@@ -119,7 +108,7 @@ export default async function VisitsPage({
           type="search"
           name="q"
           defaultValue={q}
-          placeholder="Search plate…"
+          placeholder="ابحث برقم اللوحة…"
           className="min-w-[200px] flex-1 rounded-lg border border-ff-border bg-ff-bg px-3 py-2 text-sm text-white outline-none focus:border-ff-cyan"
         />
         <select
@@ -127,10 +116,10 @@ export default async function VisitsPage({
           defaultValue={status}
           className="rounded-lg border border-ff-border bg-ff-bg px-3 py-2 text-sm text-white"
         >
-          <option value="">All statuses</option>
+          <option value="">كل الحالات</option>
           {(Object.keys(TRANSITIONS) as WorkflowStatus[]).map((s) => (
             <option key={s} value={s}>
-              {STATUS_LABEL[s]}
+              {AR.statusLabels[s] ?? s}
             </option>
           ))}
         </select>
@@ -138,7 +127,7 @@ export default async function VisitsPage({
           type="submit"
           className="rounded-lg border border-ff-border px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-ff-cyan hover:text-white"
         >
-          Filter
+          بحث
         </button>
       </form>
 
@@ -146,42 +135,42 @@ export default async function VisitsPage({
         {visits.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-500">
             {q || status
-              ? 'No visits match this search or filter.'
-              : 'No vehicle visits yet. Register the first one.'}
+              ? 'مفيش نتائج للبحث أو الفلتر ده.'
+              : 'لسه مفيش زيارات — سجّل أول زيارة.'}
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-left text-sm">
+            <table className="w-full min-w-[720px] text-right text-sm">
               <thead>
                 <tr className="border-b border-ff-border text-xs uppercase tracking-wider text-slate-500">
-                  <th className="px-3 py-2">Visit</th>
-                  <th className="px-3 py-2">Plate</th>
-                  <th className="px-3 py-2">Company</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Registered</th>
+                  <th className="px-3 py-2">الزيارة</th>
+                  <th className="px-3 py-2">رقم اللوحة</th>
+                  <th className="px-3 py-2">الشركة</th>
+                  <th className="px-3 py-2">الحالة</th>
+                  <th className="px-3 py-2">تاريخ التسجيل</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
               <tbody>
                 {visits.map((visit) => (
                   <tr key={visit.id} className="border-b border-ff-border/50">
-                    <td className="px-3 py-2 font-mono text-xs text-slate-300">{visit.visit_code}</td>
-                    <td className="px-3 py-2 font-medium text-white">{visit.plate_display}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-300" dir="ltr">{visit.visit_code}</td>
+                    <td className="px-3 py-2 font-medium text-white" dir="ltr">{visit.plate_display}</td>
                     <td className="px-3 py-2 text-slate-400">{visit.company}</td>
                     <td className="px-3 py-2">
                       <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_COLOR[visit.status] ?? ''}`}>
-                        {STATUS_LABEL[visit.status] ?? visit.status}
+                        {AR.statusLabels[visit.status] ?? visit.status}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-slate-400">
-                      {new Date(visit.created_at).toLocaleString()}
+                      {new Date(visit.created_at).toLocaleString('ar-EG')}
                     </td>
-                    <td className="px-3 py-2 text-right">
+                    <td className="px-3 py-2 text-left">
                       <Link
                         href={`/visits/${visit.id}`}
                         className="text-xs font-medium text-ff-cyan hover:underline"
                       >
-                        Open →
+                        افتح ←
                       </Link>
                     </td>
                   </tr>
@@ -192,17 +181,17 @@ export default async function VisitsPage({
         )}
 
         {pages > 1 ? (
-          <nav className="mt-4 flex items-center justify-between text-xs text-slate-400" aria-label="Pagination">
-            <span>Page {page} of {pages} · {total} visits</span>
+          <nav className="mt-4 flex items-center justify-between text-xs text-slate-400" aria-label="تنقل بين الصفحات">
+            <span>صفحة {page} من {pages} · {total} زيارة</span>
             <span className="flex gap-2">
               {page > 1 ? (
                 <Link href={`/visits?${qs({ page: String(page - 1) })}`} className="rounded border border-ff-border px-2 py-1 hover:text-white">
-                  ← Previous
+                  ← السابقة
                 </Link>
               ) : null}
               {page < pages ? (
                 <Link href={`/visits?${qs({ page: String(page + 1) })}`} className="rounded border border-ff-border px-2 py-1 hover:text-white">
-                  Next →
+                  التالية →
                 </Link>
               ) : null}
             </span>
