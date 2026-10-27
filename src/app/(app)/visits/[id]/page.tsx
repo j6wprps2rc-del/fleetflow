@@ -33,7 +33,7 @@ interface VisitDetail {
   company: string;
   notes: string | null;
   created_at: string;
-  completed_at: string | null;
+  committed_at_placeholder: never;
   registered_by_name: string | null;
 }
 
@@ -167,7 +167,7 @@ export default async function VisitDetailPage({
           ) : (
             <ol className="mt-4 flex flex-col gap-4">
               {timeline.map((m) => (
-                <li key="" key={m.id} className="flex gap-3">
+                <li key={m.id} className="flex gap-3">
                   <span
                     className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
                       m.direction === 'ENTRY' ? 'bg-ff-success' : 'bg-ff-warning'
