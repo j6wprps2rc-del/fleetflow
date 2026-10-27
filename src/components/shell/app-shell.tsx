@@ -3,20 +3,13 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
-import { Bell, LayoutDashboard, LogOut, PanelLeft, ScrollText, Users, Truck, BarChart3, Radio } from 'lucide-react';
+import { Bell, LayoutDashboard, LogOut, PanelLeft, ScrollText, Users, Truck, BarChart3 } from 'lucide-react';
 import { signOut } from '@/lib/auth-actions';
 
 export interface NavItem {
   href: string;
   label: string;
-  icon:
-    | 'dashboard'
-    | 'users'
-    | 'trucks'
-    | 'notifications'
-    | 'audit'
-    | 'reports'
-    | 'simulator';
+  icon: 'dashboard' | 'users' | 'trucks' | 'notifications' | 'audit' | 'reports';
 }
 
 const ICONS = {
@@ -25,8 +18,7 @@ const ICONS = {
   trucks: Truck,
   notifications: Bell,
   audit: ScrollText,
-  reports: BarChart3,
-  simulator: Radio
+  reports: BarChart3
 } as const;
 
 export function AppShell({

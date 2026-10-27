@@ -1,13 +1,26 @@
 import { describe, expect, it } from 'vitest';
+import * as rbacModule from '../src/lib/rbac';
 import {
   canConfirmLab,
   canConfirmSecurity,
   canManageUsers,
   canRegisterVisit,
-  canUseSimulator,
   canViewAudit,
+  canViewReports,
   isAppRole
 } from '../src/lib/rbac';
+
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const appShellSrc = readFileSync(
+  join(process.cwd(), 'src', 'components', 'shell', 'app-shell.tsx'),
+  'utf8'
+);
+const layoutSrc = readFileSync(
+  join(process.cwd(), 'src', 'app', '(app)', 'layout.tsx'),
+  'utf8'
+);
 
 describe('role permission map', () => {
   it('allows only SUPER_ADMIN to manage users and view audit logs', () => {
@@ -37,13 +50,26 @@ describe('role permission map', () => {
     expect(canConfirmLab('SECURITY_OPERATOR')).toBe(false);
   });
 
-  it('restricts the simulator to super admins', () => {
-    expect(canUseSimulator('SUPER_ADMIN')).toBe(true);
-    expect(canUseSimulator('SUPERVISOR')).toBe(false);
+  it('reports are readable by all active employees', () => {
+    expect(canViewReports('SUPERVISOR')).toBe(true);
+    expect(canViewReports('PARKING_OPERATOR')).toBe(true);
   });
 
   it('validates role strings', () => {
     expect(isAppRole('SUPER_ADMIN')).toBe(true);
     expect(isAppRole('HACKER')).toBe(false);
+  });
+});
+
+describe('manual-workflow-only conversion (device/simulator removal)', () => {
+  it('RBAC module exports no device/simulator permission', () => {
+    // Behavioral: the device-only permission must not come back silently.
+    expect('canUseSimulator' in rbacModule).toBe(false);
+    expect('canUseSimulator' as unknown as string | undefined).toBeUndefined();
+  });
+
+  it('navigation shell exposes no simulator or device routes', () => {
+    expect(appShellSrc).not.toMatch(/simulator/i);
+    expect(layoutSrc).not.toMatch(/simulator/i);
   });
 });

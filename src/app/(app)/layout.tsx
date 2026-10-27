@@ -1,5 +1,5 @@
 import { requireUser } from '@/lib/auth';
-import { canManageUsers, canViewAudit, canUseSimulator, canViewReports, ROLE_LABEL } from '@/lib/rbac';
+import { canManageUsers, canViewAudit, canViewReports, ROLE_LABEL } from '@/lib/rbac';
 import { pool } from '@/db';
 import { AppShell, type NavItem } from '@/components/shell/app-shell';
 
@@ -13,9 +13,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   ];
   if (canViewReports(profile.role)) {
     items.push({ href: '/reports', label: 'Reports', icon: 'reports' });
-  }
-  if (canUseSimulator(profile.role)) {
-    items.push({ href: '/simulator', label: 'Simulator', icon: 'simulator' });
   }
   if (canManageUsers(profile.role)) {
     items.push({ href: '/users', label: 'Users', icon: 'users' });

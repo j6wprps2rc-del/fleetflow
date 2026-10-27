@@ -61,7 +61,7 @@ interface MovementRow {
 export default async function VisitDetailPage({
   params
 }: {
-  params: { id: string };
+  params: { id: string }
 }) {
   const { profile } = await requireUser();
   const id = params.id;
@@ -189,7 +189,7 @@ export default async function VisitDetailPage({
                     <p className="text-sm text-white">
                       {m.direction === 'ENTRY' ? 'Entered' : 'Exited'} {m.zone.charAt(0) + m.zone.slice(1).toLowerCase()}
                       <span className="ml-2 rounded border border-ff-border px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-slate-500">
-                        {m.method === 'MANUAL_CONFIRMATION' ? 'manual' : m.method === 'SIMULATED' ? 'simulated' : 'device'}
+                        manual
                       </span>
                     </p>
                     <p className="text-xs text-slate-500">

@@ -6,9 +6,9 @@ import { pool } from '@/db';
 export const dynamic = 'force-dynamic';
 
 /**
- * Reports & analytics (Checkpoint 5). Read-only for all active employees
- * (canViewReports is true for every active role). All queries are aggregate
- * reads over existing tables — no new writes, no schema change.
+ * Reports & analytics — manual-workflow-only. All figures derive from the
+ * manually recorded data (vehicle_visits + gate_movements written exclusively
+ * by the authorized employee workflow). No device or simulated data exists.
  */
 export default async function ReportsPage() {
   const { profile } = await requireUser();
@@ -16,7 +16,7 @@ export default async function ReportsPage() {
     redirect('/dashboard');
   }
 
-  const [visitsToday, statusDist, zoneDwell, slowVisits, recentSim] = await Promise.all([
+  const [visitsToday, statusDist, zoneDwell, slowVisits] = await Promise.all([
     pool.query(
       `select count(*)::int as c
          from vehicle_visits
@@ -43,12 +43,6 @@ export default async function ReportsPage() {
           and created_at < now() - interval '4 hours'
         order by created_at asc
         limit 10`
-    ),
-    pool.query(
-      `select count(*)::int as c
-         from gate_movements
-        where method = 'SIMULATED'
-          and occurred_at >= now() - interval '7 days'`
     )
   ]);
 
@@ -60,7 +54,6 @@ export default async function ReportsPage() {
     status: string;
     created_at: string;
   }[];
-  const simulatedCount = (recentSim.rows[0] as { c: number }).c;
 
   const STATUS_LABEL: Record<string, string> = {
     REGISTERED: 'Registered',
@@ -74,12 +67,16 @@ export default async function ReportsPage() {
     CANCELLED: 'Cancelled'
   };
 
+  const activeCount = statusCounts
+    .filter((s) => !['COMPLETED', 'REJECTED', 'CANCELLED'].includes(s.status))
+    .reduce((sum, s) => sum + s.c, 0);
+
   return (
     <div className="flex flex-col gap-6">
       <header>
         <h1 className="text-xl font-bold tracking-tight text-white">Reports &amp; Analytics</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Operational performance over the workflow. Read-only.
+          Operational performance over the manually recorded workflow. Read-only.
         </p>
       </header>
 
@@ -90,11 +87,7 @@ export default async function ReportsPage() {
         </div>
         <div className="rounded-2xl border border-ff-border bg-ff-surface/60 p-5 shadow-card">
           <p className="text-xs uppercase tracking-wider text-slate-500">Active visits</p>
-          <p className="mt-2 text-3xl font-bold text-white">
-            {statusCounts
-              .filter((s) => !['COMPLETED', 'REJECTED', 'CANCELLED'].includes(s.status))
-              .reduce((sum, s) => sum + s.c, 0)}
-          </p>
+          <p className="mt-2 text-3xl font-bold text-white">{activeCount}</p>
         </div>
         <div className="rounded-2xl border border-ff-border bg-ff-surface/60 p-5 shadow-card">
           <p className="text-xs uppercase tracking-wider text-slate-500">Completed</p>
@@ -103,9 +96,11 @@ export default async function ReportsPage() {
           </p>
         </div>
         <div className="rounded-2xl border border-ff-border bg-ff-surface/60 p-5 shadow-card">
-          <p className="text-xs uppercase tracking-wider text-slate-500">Simulated detections (7d)</p>
-          <p className="mt-2 text-3xl font-bold text-white">{simulatedCount}</p>
-          <p className="mt-1 text-[10px] text-slate-500">Labeled — never mixed with real device data.</p>
+          <p className="text-xs uppercase tracking-wider text-slate-500">Avg dwell (last 7d)</p>
+          <p className="mt-2 text-3xl font-bold text-white">
+            {zoneActivity.length > 0 ? Math.round(zoneActivity.reduce((a, z) => a + z.movements, 0) / zoneActivity.length) : 0}
+          </p>
+          <p className="mt-1 text-[10px] text-slate-500">Movements per zone — manually confirmed.</p>
         </div>
       </section>
 
@@ -156,7 +151,7 @@ export default async function ReportsPage() {
                 <tr className="border-b border-ff-border text-xs uppercase tracking-wider text-slate-500">
                   <th className="px-3 py-2">Visit</th>
                   <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Registered</th>
+th className="px-3 py-2">Registered</th>
                 </tr>
               </thead>
               <tbody>

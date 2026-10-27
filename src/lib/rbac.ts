@@ -46,5 +46,4 @@ export const canConfirmSecurity = (role: AppRole): boolean =>
   role === 'SECURITY_OPERATOR' || role === 'SUPER_ADMIN';
 export const canConfirmLab = (role: AppRole): boolean =>
   role === 'LAB_OPERATOR' || role === 'SUPER_ADMIN';
-export const canUseSimulator = (role: AppRole): boolean => role === 'SUPER_ADMIN';
 export const canViewReports = (_role: AppRole): boolean => true; // read-only for all active employees
