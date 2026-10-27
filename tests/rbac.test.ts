@@ -65,7 +65,7 @@ describe('manual-workflow-only conversion (device/simulator removal)', () => {
   it('RBAC module exports no device/simulator permission', () => {
     // Behavioral: the device-only permission must not come back silently.
     expect('canUseSimulator' in rbacModule).toBe(false);
-    expect('canUseSimulator' as unknown as string | undefined).toBeUndefined();
+    expect((rbacModule as Record<string, unknown>).canUseSimulator).toBeUndefined();
   });
 
   it('navigation shell exposes no simulator or device routes', () => {
