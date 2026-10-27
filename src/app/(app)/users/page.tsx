@@ -53,7 +53,7 @@ export default async function UsersPage() {
                   <th className="px-3 py-2">الإيميل</th>
                   <th className="px-3 py-2">الدور</th>
                   <th className="px-3 py-2">الحالة</th>
-                  <th className="px-3 py-2">إجراءات</th>
+                  <th className="px-3 py-2">الإجراءات</th>
                 </tr>
               </thead>
               <tbody>
@@ -86,7 +86,8 @@ export default async function UsersPage() {
                             user.is_active
                               ? 'border-ff-success/40 bg-ff-success/10 text-ff-success'
                               : 'border-ff-danger/40 bg-ff-danger/10 text-ff-danger'
-                          }`n                        >
+                          }`}
+                        >
                           {user.is_active ? 'شغّال' : 'موقوف'}
                         </span>
                       </td>
