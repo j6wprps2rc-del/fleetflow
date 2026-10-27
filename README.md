@@ -14,19 +14,21 @@ Industrial vehicle-entry, zone-tracking and gate-management platform built with
 
 1. A **Parking Operator** (or Super Admin) registers a vehicle's arrival — the visit
    is created with a unique visit code, and duplicate active visits per vehicle are
-   blocked.
+   blocked (DB partial unique index + idempotency keys).
 2. The visit moves through zones as authorized employees confirm each stage:
    Parking → Security → Laboratory → Completed.
-3. Each stage transition is performed by the role that owns that zone
-   (Security Operator for security, Lab Operator for the laboratory), validated
-   server-side under a row lock so concurrent or repeated submissions cannot create
-   invalid states.
+3. Each stage transition is performed by the role that owns that zone, validated
+   server-side **under a row lock** so concurrent or repeated submissions cannot
+   create invalid states.
 4. Every transition atomically records: the movement between zones
    (`gate_movements`, append-only), the new status, notifications for the next
-   responsible role, and an audit entry — all in one transaction.
-5. **Super Admin** can additionally hold / reject / cancel a visit with a mandatory
->  reason.
-6. Reports and dashboards summarize the actually recorded manual data only.
+   responsible role, and a **mandatory audit entry** — all in one transaction; a
+   failed audit insert rolls the whole transition back.
+5. **Super Admin** can additionally hold / reject / cancel a visit (reason mandatory)
+   and manage users. Admin user-management actions are atomic too: authorization,
+   profile update, and audit entry share one transaction, and an update matching
+   zero rows throws before any audit record is written.
+6. Reports and dashboards summarize only the actually recorded manual data.
 
 ## Tech stack
 
@@ -44,21 +46,21 @@ Industrial vehicle-entry, zone-tracking and gate-management platform built with
 
 - **Server-side authorization everywhere** — `requireUser` (pages) and `assertRole`
   (server actions) verify the session server-side and read the role from `profiles`.
-  UI hiding is cosmetic.
+  UI hiding is cosmetic. Every mutation is authorized on the server, including
+  admin actions and workflow transitions (re-checked under the row lock).
 - **The app server connects as the privileged DB role** (schema owner, bypasses RLS).
   Authorization decisions are made in the app layer before the privileged query runs;
   RLS is the enforced second boundary for anon-key client access.
-- **Transactions** — `SELECT … FOR UPDATE` + post-lock re-validation; gate movements,
-  status update, audit entries, and notifications are written in one transaction.
-  **Mandatory transactional audit:** a failed audit insert rolls back the whole
-  operation; standalone audit failures remain logged-and-non-fatal by design.
+- **Transactions** — `SELECT … FOR UPDATE` + post-lock re-validation; all writes in
+  one transaction. Mandatory transactional audit: failed audit inserts roll back
+  the operation; standalone audit failures remain logged-and-non-fatal by design.
 - **Transaction-client discipline** — all queries inside `withTransaction` (including
   `assertRole` and `audit`) run on the checked-out client; nothing inside a
   transaction ever goes through the global pool (Vercel pool max 1 would deadlock).
 - **Identity** — audit records and movement confirmations always carry the
   session-derived profile id, never a client-supplied user id.
-- **Idempotency/duplicates** — DB partial unique indexes are the source of truth;
-  23505 races resolve to typed results.
+- **Self-protection** — users cannot change their own role or deactivate their own
+  account; unknown targets throw before any audit record is written.
 
 ## Setup
 
@@ -77,28 +79,31 @@ Never commit real credentials. `SUPABASE_SERVICE_ROLE_KEY` is NOT used by this a
 
 ```bash
 npm install
-npm run db:migrate   # applies drizzle/*.sql in order (0001 → 0003) via DIRECT connection
+npm run db:migrate   # applies drizzle/*.sql in order, EXCLUDING blocked files (see below)
 npm run db:verify    # read-only connection check
 ```
 
-**Migration status (honest):** **0001 and 0002 are applied** to the Supabase project
-(verified earlier via db:verify). **0003 is NOT applied yet** (visit workflow +
-notifications). It is additive-only and fully rerunnable.
+**Migration status (honest):** **0001 and 0002 are applied** (verified earlier via
+`__migrations`). **0003 (visit workflow + notifications) is NOT applied yet** — it is
+additive-only and fully rerunnable, but must be applied deliberately after review;
+until then, visit registration/transitions fail with relation-not-found errors.
 
-**About `drizzle/0004_device_ingestion.sql`:** this file is a leftover from a
-**removed** device-tracking design and is intentionally **kept in the repository
-** but **not applied and not referenced by any application code**. Reason: the
-agent environment has no connected database tool to verify that the file was
-never applied to any environment, so per the database-safety rules it is preserved
-until you confirm its status (check `select filename from __migrations` — if
-`0004_device_ingestion.sql` is absent, it is safe to delete the file; if present,
-leave the schema objects in place — they are inert — and do not run any drops).
+**Blocked migration — `drizzle/0004_device_ingestion.sql`:** this file belongs to
+the **removed** device-tracking design. It is intentionally **kept in the repository
+for review history** and is **hard-excluded by the migration runner** —
+`scripts/migrate.ts` filters it out via `BLOCKED_MIGRATIONS` BEFORE the apply loop and
+announces the exclusion loudly. It can therefore **never be applied** by the ordinary
+migration command, and `0003` can be applied alone safely. This rule is locked by
+`tests/migration-safety.test.ts`. If you later delete the file from the repo, retire
+the block entry together with that test deliberately.
 
 ### 3 · First administrator
 
-1. Supabase → Authentication → Users → Add user.
-2. The `on_auth_user_created` trigger creates a least-privilege SUPERVISOR profile.
-3. Promote once: `update public.profiles set role = 'SUPER_ADMIN' where email = 'you@company.com';`
+1. Supabase → Authentication → Users → Add user (public self-registration is NOT
+   required by this internal tool; provisioning via the dashboard keeps the least
+   privilege, and the `handle_new_user()` trigger grants only SUPERVISOR).
+2. Promote once in the SQL editor:
+   `update public.profiles set role = 'SUPER_ADMIN' where email = 'you@company.com';`
 
 ### 4 · Run & check
 
@@ -117,17 +122,18 @@ needed): plate normalization, RBAC map (including behavioral absence checks for
 removed device permissions), workflow state machine, SQL security properties of
 migrations 0002/0003, visit schemas, transition authorization matrix, gate-movement
 mapping, transaction-client propagation, mandatory-audit rollback, acknowledge
-binding regression.
+binding regression, migration-runner safety, and atomic admin user-management
+actions.
 
 **Not covered by automated tests:** runtime RLS/trigger behavior against a live
-database (needs an isolated integration DB — documented gap).
+database, and full browser user journeys (needs a running app + seeded data).
 
 ## Deployment (Vercel)
 
 Same env vars for Production/Preview/Development; middleware needs them at build
-time. Run `npm run db:migrate` (after approval) before the first deploy that includes
+time. Run `npm run db:migrate` (after review) before the first deploy that includes
 0003. A passing build is code readiness only — production readiness additionally
-needs: migrations applied, admin bootstrap, live RLS verification, and user acceptance
+needs: 0003 applied, admin bootstrap, live RLS verification, and user acceptance
 testing of the full manual workflow.
 
 ## Roadmap
@@ -140,4 +146,6 @@ testing of the full manual workflow.
 - [x] Pool/transaction hardening — tx-client propagation, mandatory transactional audit
 - [x] Checkpoint 4/5 — reports & analytics over manual data
 - [x] Manual-workflow-only conversion — device ingestion and simulator removed
-- [ ] Your review → apply 0003 → merge to `main` (explicit approval required)
+- [x] Migration-runner safety — 0004 hard-excluded, regression-tested
+- [x] Atomic admin actions — auth + update + audit in one transaction
+- [ ] Owner review → apply 0003 → merge to `main` (explicit approval required)
