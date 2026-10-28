@@ -18,43 +18,48 @@ type AuthDiagnostic =
   | 'AUTH_RATE_LIMITED'
   | 'AUTH_UNKNOWN';
 
-const AUTH_CODES_AR: Record<string, { ar: string; code: AuthDiagnostic }> = {
-  invalid_credentials: {
-    ar: 'البيانات غير صحيحة — راجع الإيميل وكلمة السر.',
-    code: 'AUTH_INVALID_CREDENTIALS'
-  },
-  email_not_confirmed: {
-    ar: 'الإيميل لسه متأكدش — افتح بريدك واعمل التأكيد الأول.',
-    code: 'AUTH_EMAIL_NOT_CONFIRMED'
-  },
-  user_banned: {
-    ar: 'الحساب ده موقوف — كلّم الأدمن.',
-    code: 'AUTH_USER_BANNED'
-  },
-  too_many_requests: {
-    ar: 'محاولات كتير — استنى شوية وحاول تاني.',
-    code: 'AUTH_RATE_LIMITED'
-  },
-  over_request_rate_limit: {
-    ar: 'محاولات كتير — استنى شوية وحاول تاني.',
-    code: 'AUTH_RATE_LIMITED'
-  }
+/** النموذج الموحّد لكل تصنيف: رسالة عربية + كود تشخيصي — لا undefined أبدًا. */
+type AuthErrorInfo = { message: string; code: AuthDiagnostic };
+
+// تعريفات فردية بنموذج موحّد — تُشارَك بين جدول الأكواد وجدول النصوص الاحتياطية
+const INVALID_CREDENTIALS: AuthErrorInfo = {
+  message: 'البيانات غير صحيحة — راجع الإيميل وكلمة السر.',
+  code: 'AUTH_INVALID_CREDENTIALS'
+};
+const EMAIL_NOT_CONFIRMED: AuthErrorInfo = {
+  message: 'الإيميل لسه متأكدش — افتح بريدك واعمل التأكيد الأول.',
+  code: 'AUTH_EMAIL_NOT_CONFIRMED'
+};
+const USER_BANNED: AuthErrorInfo = {
+  message: 'الحساب ده موقوف — كلّم الأدمن.',
+  code: 'AUTH_USER_BANNED'
+};
+const RATE_LIMITED: AuthErrorInfo = {
+  message: 'محاولات كتير — استنى شوية وحاول تاني.',
+  code: 'AUTH_RATE_LIMITED'
+};
+
+// جدول الأكواد الثابتة من خادم Supabase Auth (البند 1 من السلسلة)
+const AUTH_CODES_AR: Record<string, AuthErrorInfo> = {
+  invalid_credentials: INVALID_CREDENTIALS,
+  email_not_confirmed: EMAIL_NOT_CONFIRMED,
+  user_banned: USER_BANNED,
+  too_many_requests: RATE_LIMITED,
+  over_request_rate_limit: RATE_LIMITED
 };
 
 // احتياط نصي: للأخطاء التي لا تحمل كودًا ثابتًا (نسخ قديمة/أخطاء بلا error_code)
-const KNOWN_AUTH_MESSAGES: Record<string, { ar: string; code: AuthDiagnostic }> = {
-  'Invalid login credentials': AUTH_CODES_AR.invalid_credentials,
-  'Email not confirmed': AUTH_CODES_AR.email_not_confirmed,
-  'Too many requests. Please try again later.': AUTH_CODES_AR.too_many_requests
+const KNOWN_AUTH_MESSAGES: Record<string, AuthErrorInfo> = {
+  'Invalid login credentials': INVALID_CREDENTIALS,
+  'Email not confirmed': EMAIL_NOT_CONFIRMED,
+  'Too many requests. Please try again later.': RATE_LIMITED
 };
 
-function mapAuthError(
-  rawCode: unknown,
-  rawMessage: string
-): { message: string; code: AuthDiagnostic } {
+function mapAuthError(rawCode: unknown, rawMessage: string): AuthErrorInfo {
   // 1) الكود الثابت من الخادم — بشرط أنه سلسلة فعلًا (قد تكون undefined)
-  if (typeof rawCode === 'string' && AUTH_CODES_AR[rawCode]) {
-    return AUTH_CODES_AR[rawCode];
+  if (typeof rawCode === 'string') {
+    const byCode = AUTH_CODES_AR[rawCode];
+    if (byCode) return byCode;
   }
   // 2) احتياط النص المعروف
   const byMessage = KNOWN_AUTH_MESSAGES[rawMessage];
