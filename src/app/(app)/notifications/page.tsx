@@ -1,7 +1,7 @@
 import { requireUser } from '@/lib/auth';
 import { pool } from '@/db';
-import { acknowledgeAction } from './actions';
 import { AR } from '@/lib/i18n';
+import { AcknowledgeButton } from './acknowledge-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -85,15 +85,7 @@ export default async function NotificationsPage() {
                   </a>
                 ) : null}
                 {!n.acknowledged_at ? (
-                  <form action={acknowledgeAction}>
-                    <input type="hidden" name="id" value={n.id} />
-                    <button
-                      type="submit"
-                      className="rounded-lg border border-ff-border px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-ff-success/50 hover:text-ff-success"
-                    >
-                      تم الاطّلاع
-                    </button>
-                  </form>
+                  <AcknowledgeButton id={n.id} />
                 ) : (
                   <span className="text-xs text-slate-500">تم الاطّلاع ✓</span>
                 )}

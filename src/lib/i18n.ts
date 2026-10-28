@@ -24,6 +24,8 @@ const MESSAGE_AR: Record<string, string> = {
   'A company name is required when creating a new company':
     'لازم تكتب اسم الشركة الجديدة.',
   'Missing notification id.': 'بيانات الإشعار ناقصة.',
+  'Notification not found, not targeted at your role, or already acknowledged.':
+    'الإشعار ده مش موجود أو مش موجه لدورك أو اتقرأ قبل كده.',
   'Plate must be between 2 and 20 characters.':
     'رقم اللوحة لازم يكون بين ٢ و٢٠ حرف.',
   'Plate must be at least 2 characters.':
