@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth';
 import { canViewAudit } from '@/lib/rbac';
 import { pool } from '@/db';
+import { AR } from '@/lib/i18n';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,56 +52,55 @@ export default async function AuditPage({
   return (
     <div className="flex flex-col gap-6">
       <header>
-        <h1 className="text-xl font-bold tracking-tight text-white">Audit Trail</h1>
+        <h1 className="text-xl font-bold tracking-tight text-white">{AR.audit}</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Append-only record of every privileged action. Entries can never be edited or
-          deleted. Showing {entries.length} of {total} entries.
+          سجل دائم لكل فعل مميّز — لا يمكن تعديله أو حذفه. معروض {entries.length} من {total} سجل.
         </p>
       </header>
 
       <section className="rounded-2xl border border-ff-border bg-ff-surface/60 p-5 shadow-card">
         {entries.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-500">
-            No audit entries yet — they appear as visits are registered and transitions performed.
+            لسه مفيش سجلات — بتظهر مع تسجيل الزيارات وتنفيذ الانتقالات.
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-sm">
+            <table className="w-full min-w-[760px] text-right text-sm">
               <thead>
                 <tr className="border-b border-ff-border text-xs uppercase tracking-wider text-slate-500">
-                  <th className="px-3 py-2">When</th>
-                  <th className="px-3 py-2">Actor</th>
-                  <th className="px-3 py-2">Action</th>
-                  <th className="px-3 py-2">Target</th>
-                  <th className="px-3 py-2">Details</th>
+                  <th className="px-3 py-2">الوقت</th>
+                  <th className="px-3 py-2">الفاعل</th>
+                  <th className="px-3 py-2">الفعل</th>
+                  <th className="px-3 py-2">الهدف</th>
+                  <th className="px-3 py-2">التفاصيل</th>
                 </tr>
               </thead>
               <tbody>
                 {entries.map((e) => (
                   <tr key={e.id} className="border-b border-ff-border/50 align-top">
                     <td className="whitespace-nowrap px-3 py-2 text-slate-400">
-                      {new Date(e.created_at).toLocaleString()}
+                      {new Date(e.created_at).toLocaleString('ar-EG')}
                     </td>
                     <td className="px-3 py-2 text-white">
-                      {e.actor_name ?? 'System'}
+                      {e.actor_name ?? 'النظام'}
                       {e.actor_email ? (
-                        <span className="ml-1 text-xs text-slate-500">({e.actor_email})</span>
+                        <span className="ml-1 text-xs text-slate-500" dir="ltr">({e.actor_email})</span>
                       ) : null}
                     </td>
                     <td className="px-3 py-2">
-                      <span className="rounded border border-ff-border px-1.5 py-0.5 font-mono text-xs text-ff-cyan">
+                      <span className="rounded border border-ff-border px-1.5 py-0.5 font-mono text-xs text-ff-cyan" dir="ltr">
                         {e.action}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-slate-400">
-                      {e.target_table}
+                      <span dir="ltr" className="inline-block">{e.target_table}</span>
                       {e.target_id ? (
-                        <span className="ml-1 font-mono text-xs text-slate-500">
+                        <span className="ml-1 font-mono text-xs text-slate-500" dir="ltr">
                           #{e.target_id.slice(0, 8)}
                         </span>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-400">
+                    <td className="px-3 py-2 font-mono text-xs text-slate-400" dir="ltr">
                       {Object.keys(e.details ?? {}).length > 0
                         ? JSON.stringify(e.details).slice(0, 120)
                         : '—'}
@@ -113,17 +113,17 @@ export default async function AuditPage({
         )}
 
         {pages > 1 ? (
-          <nav className="mt-4 flex items-center justify-between text-xs text-slate-400" aria-label="Pagination">
-            <span>Page {page} of {pages}</span>
+          <nav className="mt-4 flex items-center justify-between text-xs text-slate-400" aria-label="تنقل بين الصفحات">
+            <span>صفحة {page} من {pages}</span>
             <span className="flex gap-2">
               {page > 1 ? (
                 <a href={`/audit?page=${page - 1}`} className="rounded border border-ff-border px-2 py-1 hover:text-white">
-                  ← Previous
+                  ← السابقة
                 </a>
               ) : null}
               {page < pages ? (
                 <a href={`/audit?page=${page + 1}`} className="rounded border border-ff-border px-2 py-1 hover:text-white">
-                  Next →
+                  التالية →
                 </a>
               ) : null}
             </span>
